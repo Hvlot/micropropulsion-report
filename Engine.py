@@ -85,6 +85,7 @@ class Engine:
         self.thrust_to_power = np.zeros((len(self.t), len(p), len(V)))
 
         self.burn_time = np.zeros((len(p), len(V)))
+        self.while_condition = np.zeros((len(p), len(V)))
         self.m_initial = np.zeros((len(p), len(V)))
         self.m_initial_total = np.zeros((len(p), len(V)))
 
@@ -198,11 +199,16 @@ class Engine:
             Isp = Isp_ref * CF * np.sqrt(self.Tc_vec[i, j, k])
             self.F_t[i, j, k] = Isp * 9.81 * self.m[i, j, k]
             self.P_t[i, j, k] = utils.power(self.m[i, j, k], self.Tc_vec[i, j, k], 4187)
-            try:
-                self.thrust_to_power[i, j, k] = self.F_t[i, j, k] / self.P_t[i, j, k]
-            except BaseException:
-                print('Ft', self.F_t[i, j, k], 'Pt', self.P_t[i, j, k], 'Isp', Isp)
 
+            self.thrust_to_power[i, j, k] = self.F_t[i, j, k] / self.P_t[i, j, k]
+
+        if (not self.F_t[i, j, k] > 0.12E-3) and (not m_prop_left > 0.2E-3):
+            self.while_condition = 3
+        if not self.F_t[i, j, k] > 0.12E-3:
+            self.while_condition[j, k] = 1
+        if not m_prop_left > 0.2E-3:
+            self.while_condition[j, k] = 2
         self.burn_time[j, k] = i * self.dt
-        print(f'Process {j, k}')
+        # return (j, k, i * self.dt)
+        # print(f'Process {j, k}')
         # return m_exit, m, p_t, pe, V_t, F_t, P_t, Tc, thrust_to_power, burn_time

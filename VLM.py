@@ -19,15 +19,15 @@ d_tube = 1.57E-3
 V_tube = l_tube * pi * d_tube**2 / 4
 rho_H20 = 997
 
-dt = 0.5
+dt = 0.2
 t0 = 0
 te = 1300
 
 t = np.arange(t0, te, dt)
-p = np.arange(0.2E5, 1.4E5, 0.1E4)
-# p = np.arange(1.2E5, 1.4E5, 0.1E4)
-V = np.arange(0.05, 0.6, 0.01) * V_tube
-# V = np.arange(0.3, 0.4, 0.01) * V_tube
+# p = np.arange(0.2E5, 1.4E5, 0.1E4)
+p = np.arange(0.3E5, 1.3E5, 0.1E4)
+# V = np.arange(0.05, 0.6, 0.01) * V_tube
+V = np.arange(0.05, 0.35, 0.01) * V_tube
 
 m_exit = np.zeros((len(t), len(p), len(V)))
 m = np.zeros((len(t), len(p), len(V)))
@@ -62,6 +62,35 @@ except BaseException:
     pe_input = None
 
 # %%
+
+
+def main_iteration(vlm, p_subspace, V_subspace, row, col, len_p_chunk, len_V_chunk):
+    for z, V0 in enumerate(V_subspace):
+        for y, p0 in enumerate(p_subspace):
+            # pbar.update(1)
+            vlm.m_initial[y + col * len_p_chunk, z + row * len_V_chunk] = (V_tube - V0) * vlm.propellant.rho
+            # m_initial_total[j, k] = m_initial[j, k] + p_t[0, j, k] * V_t[0, j, k] / (vlm.propellant.R * 600)
+            # m_exit[:, j, k], m[:, j, k], p_t[:, j, k], pe[:, j, k], V_t[:, j, k], F_t[:, j, k], P_t[:,
+            # j, k], Tc[:, j, k], thrust_to_power[:, j, k], time =
+            # executor.submit(vlm.envelope, vlm.m_initial[j, k], V0, p0, m_input, Tc_input, pe_input, j, k)
+            vlm.envelope(vlm.m_initial[y + col * len_p_chunk, z + row * len_V_chunk], V0, p0, m_input, Tc_input, pe_input, y +
+                         col *
+                         len_p_chunk, z +
+                         row *
+                         len_V_chunk)
+
+    # print('y0', y)
+    # print('z0', z)
+    # print('x index', row * len_V_chunk)
+    # print('y index', col * len_p_chunk)
+    # print('y', y - len(p_subspace))
+    # print('z', z - len(V_subspace))
+    burn_time = vlm.burn_time[(col * len_p_chunk):y + (col * len_p_chunk + 1), (row * len_V_chunk):z + (row * len_V_chunk + 1)]
+    while_condition = vlm.while_condition[(col * len_p_chunk):y + (col * len_p_chunk + 1), (row * len_V_chunk):z + (row * len_V_chunk + 1)]
+    # return ((col * len_p_chunk, y + (col * len_p_chunk + 1), (row * len_V_chunk), z + (row * len_V_chunk + 1)), burn_time)
+    return ((col * len_p_chunk, y + (col * len_p_chunk + 1), (row * len_V_chunk), z + (row * len_V_chunk + 1)), while_condition)
+
+
 if __name__ == "__main__":
     with concurrent.futures.ProcessPoolExecutor() as executor:
         # with tqdm(total=len(p) * len(V)) as pbar:
@@ -76,42 +105,64 @@ if __name__ == "__main__":
             V=V,
             print_parameters=False,
         )
-        for k, V0 in enumerate(V):
-            for j, p0 in enumerate(p):
-                # pbar.update(1)
+        num_processes = 4
+        print('len p', len(p))
+        print('len V', len(V))
+        len_p_chunk = len(p) // num_processes
+        len_V_chunk = len(V) // num_processes
 
-                # V0        Nitrogen gas volume [m^3]
-                # m_initial Initial propellant mass [kg]
-                vlm.m_initial[j, k] = (V_tube - V0) * vlm.propellant.rho
-                # m_initial_total[j, k] = m_initial[j, k] + p_t[0, j, k] * V_t[0, j, k] / (vlm.propellant.R * 600)
-                # m_exit[:, j, k], m[:, j, k], p_t[:, j, k], pe[:, j, k], V_t[:, j, k], F_t[:, j, k], P_t[:,
-                # j, k], Tc[:, j, k], thrust_to_power[:, j, k], time =
-                executor.submit(vlm.envelope, vlm.m_initial[j, k], V0, p0, m_input, Tc_input, pe_input, j, k)
+        n = np.arange(0, num_processes * len_p_chunk, num_processes)
+        m = np.arange(0, num_processes * len_V_chunk, num_processes)
 
-                # burn_time[j, k] = time
+        results = []
 
-    burn_time = vlm.burn_time
+        for col in range(num_processes):
+            for row in range(num_processes):
+                results.append(executor.submit(main_iteration, vlm, p[col * len_p_chunk:(col + 1) * len_p_chunk], V[row * len_V_chunk:(row + 1) * len_V_chunk],
+                                               row,
+                                               col,
+                                               len_p_chunk,
+                                               len_V_chunk))
+
+        for f in concurrent.futures.as_completed(results):
+            output = f.result()
+            coords = output[0]
+            # vlm.burn_time[coords[0]:coords[1], coords[2]:coords[3]] = output[1]
+            vlm.while_condition[coords[0]:coords[1], coords[2]:coords[3]] = output[1]
+
+        burn_time = vlm.burn_time
+        while_condition = vlm.while_condition
+        # burn_time[j, k] = time
+
     coordinates = np.unravel_index(np.argmax(burn_time), np.array(burn_time).shape)
     max_burn_time = burn_time[coordinates]
     print('max burn time', max_burn_time)
+    print('while condition value', while_condition[92, 8])
+    print('while condition value 2', while_condition[70, 5])
+    print('while condition value 2', while_condition[70, 25])
     print('coordinates', coordinates)
     plt.figure()
-    plt.contourf(V / V_tube, p, burn_time)
+    plt.contourf(V / V_tube, p, while_condition)
+    plt.scatter(V[8] / V_tube, p[92], marker='x', s=60)
+    plt.scatter(V[5] / V_tube, p[70], marker='x', s=60)
+    plt.scatter(V[25] / V_tube, p[70], marker='x', s=60)
     plt.colorbar()
     plt.show()
 
-    with open('mass_flow_data', 'wb') as f:
-        pickle.dump(m, f)
-    with open('chamber_temp_data', 'wb') as f:
-        pickle.dump(Tc, f)
-    with open('exit_pressure_data', 'wb') as f:
-        pickle.dump(pe, f)
-    with open('burn_time_data', 'wb') as f:
-        pickle.dump(burn_time, f)
-    with open('thrust_data', 'wb') as f:
-        pickle.dump(F_t, f)
-    with open('thrust_to_power_data', 'wb') as f:
-        pickle.dump(thrust_to_power, f)
+    with open('while_condition_data', 'wb') as f:
+        pickle.dump(while_condition, f)
+    # with open('mass_flow_data', 'wb') as f:
+    #     pickle.dump(m, f)
+    # with open('chamber_temp_data', 'wb') as f:
+    #     pickle.dump(Tc, f)
+    # with open('exit_pressure_data', 'wb') as f:
+    #     pickle.dump(pe, f)
+    # with open('burn_time_data', 'wb') as f:
+    #     pickle.dump(burn_time, f)
+    # with open('thrust_data', 'wb') as f:
+    #     pickle.dump(F_t, f)
+    # with open('thrust_to_power_data', 'wb') as f:
+    #     pickle.dump(thrust_to_power, f)
 
     F_t[F_t == 0] = None
     P_t[P_t == 0] = None
