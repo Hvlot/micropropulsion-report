@@ -3,7 +3,7 @@ import numpy as np
 
 import utils
 from utils import (calc_Cd, chamber_temperature, exhaust_pressure,
-                   mass_flow_rate)
+                   exhaust_velocity, mass_flow_rate)
 
 g0 = 9.81       # gravitational acceleration [m/s^2]
 Ra = 8.31447    # Gas constant
@@ -18,6 +18,14 @@ class Propellant:
         self.R = Ra / M
         self.rho = rho
 
+        # Factors from the Tang and Fenn relation to calculate discharge coefficient.
+        self.a = ((gamma + 1) / 2)**(3 / 4)
+        self.b = ((72 - 32 * np.sqrt(6)) / (3 * (gamma + 1)) + 4 * np.sqrt(6) / 3)
+        self.c = (2 * np.sqrt(2) * (gamma - 1) * (gamma + 2) / (3 * np.sqrt(gamma + 1)))
+
+        self.d = (2 / gamma)
+        self.e = (gamma - 1) / gamma
+
 
 class Nozzle:
     def __init__(self, De: float, Dt: float):
@@ -26,6 +34,8 @@ class Nozzle:
 
         self.At = utils.area(Dt)
         self.Ae = utils.area(De)
+        self.L = 0.6856E-3       # Nozzle wall length [m]
+
         self.epsilon = self.Ae / self.At    # Expansion ratio [-]
 
 
@@ -34,7 +44,7 @@ class Engine:
         # self.pc = pc
         self.Tc = Tc
 
-        self.initialize_envelope(p, V)
+        # self.initialize_envelope(p, V)
 
         self.nozzle = Nozzle(De, Dt)
         self.propellant = Propellant(M, gamma, rho)
@@ -64,31 +74,6 @@ class Engine:
             #     self.rprint('Ideal Thrust', self.F_ideal, 3, 'N')
             # self.rprint('C*', self.C_star, 1, 'm/s')
 
-    def initialize_envelope(self, p, V):
-        self.te = 1300
-        self.dt = 0.5
-
-        l_tube = 0.3
-        d_tube = 1.57E-3
-        self.V_tube = l_tube * np.pi * d_tube**2 / 4
-
-        self.t = np.arange(0, self.te, self.dt)
-
-        self.m_exit = np.zeros((len(self.t), len(p), len(V)))
-        self.m = np.zeros((len(self.t), len(p), len(V)))
-        self.p_t = np.zeros((len(self.t), len(p), len(V)))
-        self.pe = np.zeros((len(self.t), len(p), len(V)))
-        self.V_t = np.zeros((len(self.t), len(p), len(V)))
-        self.F_t = np.zeros((len(self.t), len(p), len(V)))
-        self.P_t = np.zeros((len(self.t), len(p), len(V)))
-        self.Tc_vec = np.zeros((len(self.t), len(p), len(V)))
-        self.thrust_to_power = np.zeros((len(self.t), len(p), len(V)))
-
-        self.burn_time = np.zeros((len(p), len(V)))
-        self.while_condition = np.zeros((len(p), len(V)))
-        self.m_initial = np.zeros((len(p), len(V)))
-        self.m_initial_total = np.zeros((len(p), len(V)))
-
     def isp_ideal(self) -> float:
         """Calculates the ideal specific impulse [s]
 
@@ -106,7 +91,7 @@ class Engine:
     def rprint(self, parameter: str, parameter_val: float, decimals: int, unit: str):
         print(f'{parameter}: {round(parameter_val, decimals)} [{unit}]')
 
-    def envelope(self, m_initial, V0, p0, m_input, Tc_input, pe_input, j, k):
+    def envelope(self, m_initial, V0, p0, len_t, dt=0.1):
         gamma = self.propellant.gamma
         pc_ref = 5E5
         F_ref = 3.48E-3
@@ -117,98 +102,122 @@ class Engine:
         Ae = 0.8E-3 * 0.18E-3
         epsilon = Ae / self.nozzle.At
 
-        # m_exit = np.zeros(len(t))
-        # m = np.zeros(len(t))
-        # p_t = np.zeros(len(t))
-        # pe = np.zeros(len(t))
-        # V_t = np.zeros(len(t))
-        # F_t = np.zeros(len(t))
-        # P_t = np.zeros(len(t))
-        # Tc = np.zeros(len(t))
-        # thrust_to_power = np.zeros(len(t))
+        m_exit = np.zeros(len_t)
+        m = np.zeros(len_t)
+        p_t = np.zeros(len_t)
+        pe = np.zeros(len_t)
+        V_t = np.zeros(len_t)
+        F_t = np.zeros(len_t)
+        P_t = np.zeros(len_t)
+        Tc = np.zeros(len_t)
+        thrust_to_power = np.zeros(len_t)
 
         # Initial values
 
-        self.m[0, j, k] = mass_flow_rate(self.propellant.Gamma, p0, self.nozzle.At, self.propellant.R, self.Tc)
-        self.p_t[0, j, k] = p0
-        self.Tc_vec[0, j, k] = self.Tc
+        m[0] = mass_flow_rate(self.propellant.Gamma, p0, self.nozzle.At, self.propellant.R, self.Tc)
+        p_t[0] = p0
+        Tc[0] = self.Tc
 
         # Initialize iteration
-        self.p_t[1, j, k] = V0 * p0 / (V0 + self.m_exit[0, j, k] / self.propellant.rho)
-        self.Tc_vec[1, j, k] = chamber_temperature(self.propellant.R, p0)
+        p_t[1] = V0 * p0 / (V0 + m_exit[0] / self.propellant.rho)
+        Tc[1] = chamber_temperature(self.propellant.R, p0)
 
-        m_ideal = mass_flow_rate(self.propellant.Gamma,
-                                 self.p_t[0, j, k], self.nozzle.At, self.propellant.R, self.Tc_vec[0, j, k])
+        m_ideal = mass_flow_rate(self.propellant.Gamma, p_t[0], self.nozzle.At, self.propellant.R, Tc[0])
 
-        Cd = calc_Cd(m_ideal, self.nozzle.At, self.propellant.gamma)
+        Cd = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
 
         # m[1] = mass_flow_rate(self.propellant.Gamma, p_t[0], self.nozzle.At, self.propellant.R, Tc[0])
-        self.m[1, j, k] = Cd * m_ideal
+        m[1] = Cd * m_ideal
 
-        self.m_exit[1, j, k] = self.m_exit[0, j, k] + self.m[1, j, k] * self.dt
+        m_exit[1] = m_exit[0] + m[1] * dt
 
-        self.V_t[1, j, k] = V0 * self.p_t[1, j, k] / self.p_t[1, j, k]
+        V_t[1] = V0 * p_t[1] / p_t[1]
         # M = p_t[1] * V_t[1] / (vlm.propellant.R * vlm.Tc)
 
-        self.pe[1, j, k], ier = exhaust_pressure(gamma, epsilon, self.p_t[1, j, k])
+        nevals_total = 0
+
+        pe[1], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[1], self.propellant.d, self.propellant.e)
+
+        nevals_total += nevals
 
         if ier == 1:
-            CF = self.propellant.Gamma * np.sqrt(2 * gamma / (gamma - 1) * (1 -
-                                                 (self.pe[1, j, k] / self.p_t[1, j, k]) ** ((gamma - 1) / gamma))) + self.pe[1, j, k] / self.p_t[1, j, k] * epsilon
+            CF = self.propellant.Gamma * np.sqrt(2 * gamma / (gamma - 1) * (1 - (pe[1] / p_t[1]) ** ((gamma - 1) / gamma))) + pe[1] / p_t[1] * epsilon
         else:
             CF = CF_ref
-        self.F_t[1, j, k] = Isp_ref * CF * np.sqrt(self.Tc_vec[1, j, k]) * 9.81 * self.m[1, j, k]
+        # CF = CF_ref
+        F_t[1] = Isp_ref * CF * np.sqrt(Tc[1]) * 9.81 * m[1]
 
-        m_prop_left = m_initial - self.m_exit[1, j, k]
+        m_prop_left = m_initial - m_exit[1]
 
         i = 1
 
-        while self.F_t[i, j, k] > 0.12E-3 and m_prop_left > 0.2E-3:
+        while F_t[i] > 0.12E-3 and m_prop_left > 0.2E-3:
             i += 1
-            self.p_t[i, j, k] = V0 * p0 / (V0 + self.m_exit[i - 1, j, k] / self.propellant.rho)
-            if Tc_input is not None:
-                self.Tc_vec[i, j, k] = Tc_input[i, j, k]
-            else:
-                self.Tc_vec[i, j, k] = chamber_temperature(self.propellant.R, self.p_t[i - 1, j, k])
-                # m[i, j, k] = p_t[i - 1] * self.nozzle.At * self.propellant.Gamma / np.sqrt(self.propellant.R * Tc[i, j, k])
-            if m_input is not None:
-                self.m[i, j, k] = m_input[i, j, k]
-            else:
-                m_ideal = mass_flow_rate(self.propellant.Gamma,
-                                         self.p_t[i - 1, j, k],
-                                         self.nozzle.At,
-                                         self.propellant.R,
-                                         self.Tc_vec[i, j, k])
-                Cd = calc_Cd(m_ideal, self.nozzle.At, self.propellant.gamma)
-                self.m[i, j, k] = Cd * m_ideal
+            p_t[i] = V0 * p0 / (V0 + m_exit[i - 1] / self.propellant.rho)
 
-            self.m_exit[i, j, k] = self.m_exit[i - 1, j, k] + self.m[i, j, k] * self.dt
-            m_prop_left = m_initial - self.m_exit[i, j, k]
+            Tc[i] = chamber_temperature(self.propellant.R, p_t[i - 1])
+            # m[i, j, k] = p_t[i - 1] * self.nozzle.At * self.propellant.Gamma / np.sqrt(self.propellant.R * Tc[i, j, k])
+
+            m_ideal = mass_flow_rate(self.propellant.Gamma, p_t[i - 1], self.nozzle.At, self.propellant.R, Tc[i])
 
             # V_t[i, j, k] = V0 * p_t[1] / p_t[i, j, k]
             # M = p_t[i, j, k] * V_t[i, j, k] / (vlm.propellant.R * vlm.Tc)
-            if pe_input is not None:
-                self.pe[i, j, k] = pe_input[i, j, k]
-            else:
-                self.pe[i, j, k], ier = exhaust_pressure(gamma, epsilon, self.p_t[i, j, k], self.pe[i - 1, j, k])
-            if ier == 1:
-                CF = self.propellant.Gamma * np.sqrt(2 * gamma / (gamma - 1) *
-                                                     (1 - (self.pe[i, j, k] / self.p_t[i, j, k])**((gamma - 1) / gamma))) + self.pe[i, j, k] / self.p_t[i, j, k] * epsilon
-            else:
-                CF = CF_ref
-            Isp = Isp_ref * CF * np.sqrt(self.Tc_vec[i, j, k])
-            self.F_t[i, j, k] = Isp * 9.81 * self.m[i, j, k]
-            self.P_t[i, j, k] = utils.power(self.m[i, j, k], self.Tc_vec[i, j, k], 4187)
 
-            self.thrust_to_power[i, j, k] = self.F_t[i, j, k] / self.P_t[i, j, k]
+            pe[i], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[i], self.propellant.d, self.propellant.e, pe[i - 1])
+            # if i % 10 == 0:
+            # pe[i], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[i], self.propellant.d, self.propellant.e, pe[i - 10])
+            # nevals_total += nevals
 
-        if (not self.F_t[i, j, k] > 0.12E-3) and (not m_prop_left > 0.2E-3):
-            self.while_condition = 3
-        if not self.F_t[i, j, k] > 0.12E-3:
-            self.while_condition[j, k] = 1
-        if not m_prop_left > 0.2E-3:
-            self.while_condition[j, k] = 2
-        self.burn_time[j, k] = i * self.dt
+            # eq. 8-3 from TRP reader [Zandbergen]
+            CF = self.propellant.Gamma * np.sqrt(2 * gamma / (gamma - 1) *
+                                                 (1 - (pe[i] / p_t[i])**((gamma - 1) / gamma))) + pe[i] / p_t[i] * epsilon
+
+            Ue = exhaust_velocity(self.propellant.gamma, self.propellant.R, self.Tc, pe[i], p_t[i])
+
+            rho_c = 997         # Chamber density [kg/m^3]
+            R_e = 0.4E-3        # Nozzle radius [m]
+
+            Te = self.Tc * (pe[i] / p_t[i])**((gamma - 1) / gamma)
+            # print('Te', Te, 'pe', pe[i])
+
+            # viscosity of the exhaust gas only dependent on exit temperature, which is constant.
+            mu_e = 3.06E-6      # Dynamic viscosity [Pa*s]
+            # Using the ideal gas law
+            rho_e = pe[i] / (self.propellant.R * Te)
+            Re_e = rho_e * Ue * self.nozzle.L / mu_e
+            # print('Re', Re_e)
+            theta = 0.664 / np.sqrt(Re_e) * self.nozzle.L
+
+            dF = rho_e * Ue * 2 * np.pi * R_e * theta * Ue
+
+            Cd = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
+            # Cd = 1
+            m[i] = Cd * m_ideal
+
+            m_exit[i] = m_exit[i - 1] + m[i] * dt
+            m_prop_left = m_initial - m_exit[i]
+
+            Isp = Isp_ref * CF * np.sqrt(Tc[i])
+            F_t[i] = Isp * 9.81 * m[i] - dF
+            # print('F', F_t[i], 'dF', dF, 'F-dF', F_t[i] - dF)
+
+            P_t[i] = utils.power(m[i], Tc[i], 4187)
+
+            thrust_to_power[i] = F_t[i] / P_t[i]
+
+        if F_t[i] < 0.12E-3:
+            while_condition = 1
+        if m_prop_left < 0.2E-3:
+            while_condition = 2
+        burn_time = i * dt
+
+        # if (nevals_avg := nevals_total / i) > 6:
+        # print('average number of function calls', nevals_total / i)
+        # print('burn time', burn_time)
+
+        # print('min', np.min(pe[pe != 0]), 'mean', np.mean(pe[pe != 0]), 'max', np.max(pe[pe != 0]))
+
+        return burn_time, while_condition, F_t, P_t
         # return (j, k, i * self.dt)
         # print(f'Process {j, k}')
         # return m_exit, m, p_t, pe, V_t, F_t, P_t, Tc, thrust_to_power, burn_time
