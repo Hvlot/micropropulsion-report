@@ -6,66 +6,83 @@ def vandenkerckhove(gamma: float) -> float:
     return np.sqrt(gamma) * (2 / (gamma + 1))**((gamma + 1) / (2 * (gamma - 1)))
 
 
-# @njit(cache=True)
 def area(D: float) -> float:
     """ Calculate the area [m^2]
 
-    Arguments:
-        D {float} -- Diameter [m]
-
     Parameters
     ----------
-    D : float
-        Diameter [m]
+    D: Diameter [m]
     """
     return np.pi / 4 * D**2
 
 
-# @njit(cache=True)
 def exhaust_velocity(gamma: float, R: float, Tc: float, pe: float, pc: float) -> float:
+    """Calculate the exhaust velocity [m/s]"""
     ve_lim = np.sqrt(2 * gamma / (gamma - 1) * R * Tc)
     return ve_lim * np.sqrt(1 - (pe / pc)**((gamma - 1) / gamma))
 
 
-# @njit(cache=True)
 def mass_flow_rate(Gamma: float, pc: float, At: float, R: float, Tc: float) -> float:
-    """Returns the mass flow rate [kg/s]"""
+    """Calculate the mass flow rate [kg/s]
+
+    - Gamma: vandenkerkhove parameter [-]
+    - pc: chamber pressure [pa]
+    - At: throat area [m^2]
+    - R: specific gas constant [J/(kg*K)]
+    - Tc: chamber temperature [K]
+    """
     return Gamma * pc * At / np.sqrt(R * Tc)
 
 
 def func(x, gamma, Gamma, epsilon, pc, d, e):
     """Function that relates the expansion ratio and the pressure ratio.
 
-    x: exhaust pressure
-    d: 2/gamma
-    e: (gamma-1)/gamma
+    - x: exhaust pressure [pa]
+    - pc: chamber pressure [pa]
+    - epsilon: Area ratio [-]
+    - d: 2/gamma [-]
+    - e: (gamma-1)/gamma [-]
     """
     return epsilon - Gamma / np.sqrt(2 / e * (x / pc)**d * (1 - (x / pc)**e))
 
 
 def exhaust_pressure(gamma, Gamma, epsilon, pc, d, e, x0=50):
+    """Calculate the exhaust pressure [pa] with fsolve.
+
+    - gamma: specific heat ratio [-]
+    - d: 2/gamma [-]
+    - e: (gamma-1)/gamma [-]
+    """
     pe, infodict, ier, _ = fsolve(func, x0=x0, args=(gamma, Gamma, epsilon, pc, d, e), xtol=0.01, full_output=True)
 
     return pe[0], ier, infodict['nfev']
 
 
-# @njit(cache=True)
 def characteristic_velocity(pc, At, m):
     """Calculate the characteristic exhaust velocity [m/s]"""
     return pc * At / m
 
 
-# @njit(cache=True)
 def power(m, Tc, cp_liquid, Lh=2256E3, Ta=298, efficiency=0.6):
     return m / efficiency * (cp_liquid * (Tc - Ta) + Lh)
 
 
-# @njit(cache=True)
-def chamber_temperature(R, pc, T_ref=373.15, Lh=2256E3, p_ref=1.0142E5):
+def chamber_temperature(R: float, pc: float, T_ref: float = 373.15, Lh: float = 2256E3, p_ref: float = 1.0142E5) -> float:
+    """Calculate the chamber temperature [K].
+
+    - R: specific gas constant [J/(kg*K)]
+    - pc: chamber temperature [pa]
+    """
     return T_ref * Lh / (T_ref * R * np.log(p_ref / pc) + Lh)
 
 
 def calc_Cd(m_ideal, At, a, b, c):
+    """Calculate the discharge coefficient [-].
+
+    - a: ((gamma + 1) / 2)**(3 / 4)
+    - b: ((72 - 32 * np.sqrt(6)) / (3 * (gamma + 1)) + 4 * np.sqrt(6) / 3)
+    - c: (2 * np.sqrt(2) * (gamma - 1) * (gamma + 2) / (3 * np.sqrt(gamma + 1)))
+    """
     w_t = 25.36E-6          # Throat width [m]
     mu_t = 1.1E-5           # Dynamic viscosity [Pa*s]
     Re_t = m_ideal * w_t / (mu_t * At)
@@ -112,3 +129,22 @@ def initialize_envelope(p, V, te, dt):
     }
 
     return arrays
+
+
+def calc_dF(gamma, R, Tc, pe, pc, L):
+    Ue = exhaust_velocity(gamma, R, Tc, pe, pc)
+
+    Te = Tc * (pe / pc)**((gamma - 1) / gamma)
+
+    # Using the ideal gas law
+    rho_e = pe / (R * Te)                           # Gas density at the nozzle exit [kg/m^3]
+
+    # viscosity of the exhaust gas only dependent on exit temperature, which is constant.
+    mu_e = 3.06E-6                                  # Dynamic viscosity [Pa*s]
+    Re_e = rho_e * Ue * L / mu_e                    # Nozzle exit Reynolds number [-]
+    theta = 0.664 / np.sqrt(Re_e) * L               # momentum loss thickness [m]
+    R_e = 0.4E-3                                    # Nozzle radius [m]
+
+    dF = rho_e * Ue * 2 * np.pi * R_e * theta * Ue  # momentum loss [N]
+
+    return dF

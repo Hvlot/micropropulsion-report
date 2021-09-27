@@ -118,8 +118,6 @@ if __name__ == "__main__":
         gamma=1.33,
         rho=rho_H20,
         M=18.0153E-3,
-        p=p,
-        V=V,
         print_parameters=False,
     )
 
