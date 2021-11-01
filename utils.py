@@ -84,13 +84,14 @@ def calc_Cd(m_ideal, At, a, b, c):
     - c: (2 * np.sqrt(2) * (gamma - 1) * (gamma + 2) / (3 * np.sqrt(gamma + 1)))
     """
     w_t = 25.36E-6          # Throat width [m]
-    mu_t = 1.1E-5           # Dynamic viscosity [Pa*s]
+    mu_t = 1.1E-5           # Dynamic viscosity [Pa*s] (local or stagnation conditions?)
     Re_t = m_ideal * w_t / (mu_t * At)
-
+    # print('Re', Re_t)
     Re_mod = Re_t * np.sqrt(2)
 
     Cd = 1 - a * b * 1 / np.sqrt(Re_mod) + c * 1 / Re_mod
-    return Cd
+    # print('Cd', Cd, 'Re', Re_t)
+    return Cd, Re_t
 
 
 def initialize_envelope(p, V, te, dt):
@@ -131,7 +132,29 @@ def initialize_envelope(p, V, te, dt):
     return arrays
 
 
-def calc_dF(gamma, R, Tc, pe, pc, L):
+def calc_dp(m, rho):
+    """Calculate the pressure drop over the feed lines. """
+    # d_fl = 1.57E-3
+    d_fl = 4.5E-6
+    # A = np.pi / 4 * d_fl**2
+    A = d_fl * 0.1E-3
+    v = m / (A * rho)
+    mu = 1.1E-5
+    Re = rho * v * d_fl / mu
+
+    f = 64 / Re
+    L = 0.3
+
+    N_lines = L / 2E-3
+    N_bends = 200 * N_lines
+
+    # dp = f * L / d_fl * 0.5 * rho * v**2 + 1.3 * N_bends * 0.5 * v**2
+    dp = 1.3 * N_bends * 0.5 * v**2
+
+    return dp
+
+
+def calc_dF(gamma, R, Tc, pe, pc, L, m, Ae):
     Ue = exhaust_velocity(gamma, R, Tc, pe, pc)
 
     Te = Tc * (pe / pc)**((gamma - 1) / gamma)
@@ -141,10 +164,17 @@ def calc_dF(gamma, R, Tc, pe, pc, L):
 
     # viscosity of the exhaust gas only dependent on exit temperature, which is constant.
     mu_e = 3.06E-6                                  # Dynamic viscosity [Pa*s]
+
+    # As taken from example 7.2.5 in the TRP reader [Zandbergen]
     Re_e = rho_e * Ue * L / mu_e                    # Nozzle exit Reynolds number [-]
-    theta = 0.664 / np.sqrt(Re_e) * L               # momentum loss thickness [m]
+    Re2 = m * L / (mu_e * Ae)
+    theta = 0.664 / np.sqrt(Re2) * L                # momentum loss thickness [m]
     R_e = 0.4E-3                                    # Nozzle radius [m]
 
     dF = rho_e * Ue * 2 * np.pi * R_e * theta * Ue  # momentum loss [N]
 
+    # print('theta', theta, 'Re', Re_e, 'Re2', Re2)
+
     return dF
+
+# %%

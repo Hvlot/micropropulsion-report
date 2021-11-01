@@ -71,6 +71,7 @@ def main_iteration(vlm, p_subspace, V_subspace, row, col, len_p_chunk, len_V_chu
     # Process stuff to be profiled
 
     burn_time_subarray = np.zeros((len(p_subspace), len(V_subspace)))
+    m_initial_subarray = np.zeros((len(p_subspace), len(V_subspace)))
     while_condition_subarray = np.zeros((len(p_subspace), len(V_subspace)))
     F_t_subarray = np.zeros((len_t, len(p_subspace), len(V_subspace)))
     P_t_subarray = np.zeros((len_t, len(p_subspace), len(V_subspace)))
@@ -82,6 +83,7 @@ def main_iteration(vlm, p_subspace, V_subspace, row, col, len_p_chunk, len_V_chu
             j = y + col * len_p_chunk
             k = z + row * len_V_chunk
             m_initial = (V_tube - V0) * vlm.propellant.rho
+            m_initial_subarray[y, z] = m_initial
             # m_initial_total[j, k] = m_initial[j, k] + p_t[0, j, k] * V_t[0, j, k] / (vlm.propellant.R * 600)
             # m_exit[:, j, k], m[:, j, k], p_t[:, j, k], pe[:, j, k], V_t[:, j, k], F_t[:, j, k], P_t[:,
             # j, k], Tc[:, j, k], thrust_to_power[:, j, k], time =
@@ -94,7 +96,8 @@ def main_iteration(vlm, p_subspace, V_subspace, row, col, len_p_chunk, len_V_chu
         "burn_time": burn_time_subarray,
         "while_condition": while_condition_subarray,
         "thrust": F_t_subarray,
-        "power": P_t_subarray
+        "power": P_t_subarray,
+        "m_initial": m_initial_subarray
     }
 
     # burn_time = vlm.burn_time[(col * len_p_chunk):y + (col * len_p_chunk + 1), (row * len_V_chunk):z + (row * len_V_chunk + 1)]
@@ -118,7 +121,6 @@ if __name__ == "__main__":
         gamma=1.33,
         rho=rho_H20,
         M=18.0153E-3,
-        print_parameters=False,
     )
 
     arrays = utils.initialize_envelope(p, V, te, dt)
@@ -150,12 +152,13 @@ if __name__ == "__main__":
             # Structure of the output: [(tuple of the region ranges), {dictionary with output arrays}]
             coords = output[0]
             burn_time[coords[0]:coords[1], coords[2]:coords[3]] = output[1]['burn_time']
+            m_initial[coords[0]:coords[1], coords[2]:coords[3]] = output[1]['m_initial']
             while_condition[coords[0]:coords[1], coords[2]:coords[3]] = output[1]['while_condition']
             F_t[:, coords[0]:coords[1], coords[2]:coords[3]] = output[1]['thrust']
             P_t[:, coords[0]:coords[1], coords[2]:coords[3]] = output[1]['power']
 
     def find_2d_max(arr):
-        coordinates = np.unravel_index(np.argmax(arr), np.array(arr).shape)
+        coordinates = np.unravel_index(np.nanargmax(arr), np.array(arr).shape)
         return arr[coordinates], coordinates
 
     # coordinates = np.unravel_index(np.argmax(burn_time), np.array(burn_time).shape)
@@ -221,11 +224,10 @@ if __name__ == "__main__":
 
     normalized_m_initial = m_initial / m_initial[0, 0]
 
-    max_mean_F_t = mean_F_t[np.unravel_index(np.argmax(mean_F_t), np.array(mean_F_t).shape)]
+    max_mean_F_t, _ = find_2d_max(mean_F_t)
     normalized_mean_thrust = mean_F_t / max_mean_F_t
 
-    max_mean_thrust_to_power = mean_thrust_to_power[np.unravel_index(
-        np.nanargmax(mean_thrust_to_power), np.array(mean_thrust_to_power).shape)]
+    max_mean_thrust_to_power, _ = find_2d_max(mean_thrust_to_power)
     normalized_mean_thrust_to_power = mean_thrust_to_power / max_mean_thrust_to_power
 
     w1, w2, w3, w4 = (0.4, 0.25, 0.25, 0.1)
