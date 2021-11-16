@@ -1,7 +1,9 @@
 # %% - imports
 import concurrent.futures
+import copy
 # import pickle
 import cProfile
+import pickle
 import time
 
 import matplotlib.pyplot as plt
@@ -17,49 +19,26 @@ At = 4.5E-9
 l_tube = 0.3
 d_tube = 1.57E-3
 V_tube = l_tube * pi * d_tube**2 / 4
-rho_H20 = 997
+rho_H20 = 999.7
 
-dt = 0.2
+dt = 0.1
 t0 = 0
-te = 1300
+te = 1500
 
 t = np.arange(t0, te, dt)
 # p = np.arange(0.2E5, 1.4E5, 0.1E4)
 p = np.arange(0.3E5, 1.3E5, 0.1E4)
 # V = np.arange(0.05, 0.6, 0.01) * V_tube
-V = np.arange(0.05, 0.35, 0.01) * V_tube
-
-# m_exit = np.zeros((len(t), len(p), len(V)))
-# m = np.zeros((len(t), len(p), len(V)))
-# p_t = np.zeros((len(t), len(p), len(V)))
-# pe = np.zeros((len(t), len(p), len(V)))
-# V_t = np.zeros((len(t), len(p), len(V)))
-# F_t = np.zeros((len(t), len(p), len(V)))
-# P_t = np.zeros((len(t), len(p), len(V)))
-# Tc = np.zeros((len(t), len(p), len(V)))
-# thrust_to_power = np.zeros((len(t), len(p), len(V)))
+V = np.arange(0.05, 0.37, 0.005) * V_tube
 
 burn_time = np.zeros((len(p), len(V)))
 m_initial = np.zeros((len(p), len(V)))
 m_initial_total = np.zeros((len(p), len(V)))
 
-# try:
-#     with open('mass_flow_data', 'rb') as f:
-#         m_input = pickle.load(f)
-# except BaseException:
-#     m_input = None
 
-# try:
-#     with open('chamber_temp_data', 'rb') as f:
-#         Tc_input = pickle.load(f)
-# except BaseException:
-#     Tc_input = None
-
-# try:
-#     with open('exit_pressure_data', 'rb') as f:
-#         pe_input = pickle.load(f)
-# except BaseException:
-#     pe_input = None
+def find_2d_max(arr):
+    coordinates = np.unravel_index(np.nanargmax(arr), np.array(arr).shape)
+    return arr[coordinates], coordinates
 
 # %%
 
@@ -68,13 +47,15 @@ def main_iteration(vlm, p_subspace, V_subspace, row, col, len_p_chunk, len_V_chu
     pr = cProfile.Profile()
     pr.enable()
 
-    # Process stuff to be profiled
-
     burn_time_subarray = np.zeros((len(p_subspace), len(V_subspace)))
     m_initial_subarray = np.zeros((len(p_subspace), len(V_subspace)))
+    m_prop_left_subarray = np.zeros((len(p_subspace), len(V_subspace)))
     while_condition_subarray = np.zeros((len(p_subspace), len(V_subspace)))
+    F_t_range_subarray = np.zeros((len(p_subspace), len(V_subspace)))
     F_t_subarray = np.zeros((len_t, len(p_subspace), len(V_subspace)))
     P_t_subarray = np.zeros((len_t, len(p_subspace), len(V_subspace)))
+    p_t_subarray = np.zeros((len_t, len(p_subspace), len(V_subspace)))
+    Tc_subarray = np.zeros((len_t, len(p_subspace), len(V_subspace)))
 
     for z, V0 in enumerate(V_subspace):
         for y, p0 in enumerate(p_subspace):
@@ -84,28 +65,25 @@ def main_iteration(vlm, p_subspace, V_subspace, row, col, len_p_chunk, len_V_chu
             k = z + row * len_V_chunk
             m_initial = (V_tube - V0) * vlm.propellant.rho
             m_initial_subarray[y, z] = m_initial
-            # m_initial_total[j, k] = m_initial[j, k] + p_t[0, j, k] * V_t[0, j, k] / (vlm.propellant.R * 600)
-            # m_exit[:, j, k], m[:, j, k], p_t[:, j, k], pe[:, j, k], V_t[:, j, k], F_t[:, j, k], P_t[:,
-            # j, k], Tc[:, j, k], thrust_to_power[:, j, k], time =
-            # executor.submit(vlm.envelope, vlm.m_initial[j, k], V0, p0, m_input, Tc_input, pe_input, j, k)
 
-            burn_time_subarray[y, z], while_condition_subarray[y, z], F_t_subarray[:, y,
-                                                                                   z], P_t_subarray[:, y, z] = vlm.envelope(m_initial, V0, p0, len_t, dt)
+            burn_time_subarray[y, z], while_condition_subarray[y, z], F_t_subarray[:, y, z], F_t_range_subarray[y, z], P_t_subarray[:,
+                                                                                                                                    y, z], m_prop_left_subarray[y, z], p_t_subarray[:, y, z], Tc_subarray[:, y, z] = vlm.envelope(m_initial, V0, p0, len_t, dt)
 
     output_dict = {
         "burn_time": burn_time_subarray,
         "while_condition": while_condition_subarray,
         "thrust": F_t_subarray,
+        "thrust_range": F_t_range_subarray,
         "power": P_t_subarray,
-        "m_initial": m_initial_subarray
+        "m_initial": m_initial_subarray,
+        "m_prop_left": m_prop_left_subarray,
+        "chamber_pressure": p_t_subarray,
+        "Tc": Tc_subarray
     }
 
-    # burn_time = vlm.burn_time[(col * len_p_chunk):y + (col * len_p_chunk + 1), (row * len_V_chunk):z + (row * len_V_chunk + 1)]
-    # while_condition = vlm.while_condition[(col * len_p_chunk):y + (col * len_p_chunk + 1), (row * len_V_chunk):z + (row * len_V_chunk + 1)]
     pr.disable()
-    pr.print_stats(sort='tottime')  # sort as you wish
-    return ((col * len_p_chunk, y + (col * len_p_chunk + 1), (row * len_V_chunk), z + (row * len_V_chunk + 1)), output_dict)
-    # return ((col * len_p_chunk, y + (col * len_p_chunk + 1), (row * len_V_chunk), z + (row * len_V_chunk + 1)), while_condition)
+    pr.print_stats(sort='tottime')
+    return ((col * len_p_chunk, y + 1 + col * len_p_chunk, (row * len_V_chunk), z + 1 + row * len_V_chunk), output_dict)
 
 
 if __name__ == "__main__":
@@ -125,10 +103,14 @@ if __name__ == "__main__":
 
     arrays = utils.initialize_envelope(p, V, te, dt)
     burn_time = arrays['burn_time']
+    m_prop_left = arrays['m_prop_left']
     while_condition = arrays['while_condition']
     # thrust_to_power = arrays['thrust_to_power']
     F_t = arrays['F_t']
+    F_t_range = arrays['F_t_range']
     P_t = arrays['P_t']
+    p_t = arrays['p_t']
+    Tc = arrays['Tc']
     t = arrays['time']
     dt = arrays['dt']
 
@@ -153,13 +135,13 @@ if __name__ == "__main__":
             coords = output[0]
             burn_time[coords[0]:coords[1], coords[2]:coords[3]] = output[1]['burn_time']
             m_initial[coords[0]:coords[1], coords[2]:coords[3]] = output[1]['m_initial']
+            m_prop_left[coords[0]:coords[1], coords[2]:coords[3]] = output[1]['m_prop_left']
+            F_t_range[coords[0]:coords[1], coords[2]:coords[3]] = output[1]['thrust_range']
             while_condition[coords[0]:coords[1], coords[2]:coords[3]] = output[1]['while_condition']
             F_t[:, coords[0]:coords[1], coords[2]:coords[3]] = output[1]['thrust']
             P_t[:, coords[0]:coords[1], coords[2]:coords[3]] = output[1]['power']
-
-    def find_2d_max(arr):
-        coordinates = np.unravel_index(np.nanargmax(arr), np.array(arr).shape)
-        return arr[coordinates], coordinates
+            p_t[:, coords[0]:coords[1], coords[2]:coords[3]] = output[1]['chamber_pressure']
+            Tc[:, coords[0]:coords[1], coords[2]:coords[3]] = output[1]['Tc']
 
     # coordinates = np.unravel_index(np.argmax(burn_time), np.array(burn_time).shape)
     max_burn_time, coordinates = find_2d_max(burn_time)
@@ -174,12 +156,73 @@ if __name__ == "__main__":
 
     F_t[F_t == 0] = None
     P_t[P_t == 0] = None
+    m_prop_left[m_prop_left == 0] = None
     thrust_to_power = F_t / P_t
     # thrust_to_power[thrust_to_power == 0] = None
-    mean_F_t = np.nanmean(F_t, axis=0)
+    # mean_F_t = np.nanmean(F_t, axis=0)
     mean_thrust_to_power = np.nanmean(thrust_to_power, axis=0)
 
-    fig, axs = plt.subplots(2, 2, figsize=(12, 6))
+    # %% - Normalize values
+
+    normalized_burn_time = burn_time / max_burn_time
+
+    normalized_m_initial = m_initial / m_initial[0, 0]
+
+    max_m_prop_left, _ = find_2d_max(m_prop_left)
+    normalized_m_prop_left = m_prop_left / max_m_prop_left
+
+    mean_P_t = np.nanmean(P_t, axis=0)
+    max_mean_P_t, _ = find_2d_max(mean_P_t)
+    normalized_mean_P_t = mean_P_t / max_mean_P_t
+
+    # max_mean_F_t, _ = find_2d_max(mean_F_t)
+    # normalized_mean_thrust = mean_F_t / max_mean_F_t
+    F_req_max = 3E-3
+    F_req_min = 0.12E-3
+    normalized_thrust_range = F_t_range / (F_req_max - F_req_min)
+
+    max_mean_thrust_to_power, _ = find_2d_max(mean_thrust_to_power)
+    normalized_mean_thrust_to_power = mean_thrust_to_power / max_mean_thrust_to_power
+
+# %% - Plot score
+    w1, w2, w3, w4 = (0.40, 0.25, 0.10, 0.25)
+    score = w1 * normalized_burn_time + w2 * normalized_thrust_range + \
+        w3 * (1 - normalized_mean_P_t) + w4 * normalized_m_prop_left
+
+    for (x, y), elem in np.ndenumerate(score):
+        if np.nanmax(P_t[:, x, y]) >= 4.0:
+            score[x, y] = 0
+        if p[x] > 125000:
+            score[x, y] = 0
+
+    best_scores = []
+    score2 = copy.deepcopy(score)
+    for _ in range(10):
+        best_score, coordinates = find_2d_max(score2)
+        best_scores.append((best_score, coordinates))
+        score2[coordinates] = 0
+    print(best_scores)
+    max_score, coords = find_2d_max(score)
+    max_score_x, max_score_y = coords
+    print(max_score_x, max_score_y)
+
+    plt.figure()
+    plt.contourf(V / V_tube, p, score)
+    plt.colorbar()
+
+    plt.title('Baseline model score')
+    plt.xlabel('Initial volume [V/V_tube]')
+    plt.ylabel('Pressure [pa]')
+
+    plt.scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="black")
+    x_text = V[max_score_y + 2] / V_tube
+    y_text = p[max_score_x - 2]
+    plt.text(s=round(max_score, 3), x=x_text, y=y_text, horizontalalignment="left")
+
+    plt.show()
+
+# %% - Plot contours
+    fig, axs = plt.subplots(3, 2, figsize=(12, 6))
 
     img = axs[0, 0].contourf(V / V_tube, p, burn_time)
     axs[0, 0].set_title('Burn time [s]')
@@ -191,110 +234,214 @@ if __name__ == "__main__":
     axs[1, 0].set_title('Thrust < 0.12 mN (1) or m_left < 0.2 g (2)')
     plt.colorbar(img, ax=axs[1, 0])
 
-    plt.scatter(V[coordinates[1]] / V_tube, p[coordinates[0]], marker='x', s=60)
-
-    img = axs[0, 1].contourf(V / V_tube, p, mean_F_t * 1E3)
-    axs[0, 1].set_title('Mean thrust [mN]')
+    img = axs[0, 1].contourf(V / V_tube, p, normalized_thrust_range)
+    axs[0, 1].set_title('Normalized thrust range [-]')
     plt.colorbar(img, ax=axs[0, 1])
     img = axs[1, 1].contourf(V / V_tube, p, mean_thrust_to_power)
     axs[1, 1].set_title('Thrust to power [N/W]')
     plt.colorbar(img, ax=axs[1, 1])
+    img = axs[2, 0].contourf(V / V_tube, p, normalized_m_prop_left)
+    axs[2, 0].set_title('Propellant left [-]')
+    plt.colorbar(img, ax=axs[2, 0])
+    img = axs[2, 1].contourf(V / V_tube, p, score)
+    axs[2, 1].set_title('Score [-]')
+    plt.colorbar(img, ax=axs[2, 1])
     # plt.imshow(while_condition)
+
+    axs[0, 0].scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="white")
+    axs[0, 1].scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="white")
+    axs[1, 0].scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="white")
+    axs[1, 1].scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="white")
+    axs[2, 0].scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="white")
+    axs[2, 1].scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="white")
+
     plt.tight_layout()
     plt.show()
 
-    # with open('while_condition_data', 'wb') as f:
-    #     pickle.dump(while_condition, f)
-    # with open('mass_flow_data', 'wb') as f:
-    #     pickle.dump(m, f)
-    # with open('chamber_temp_data', 'wb') as f:
-    #     pickle.dump(Tc, f)
-    # with open('exit_pressure_data', 'wb') as f:
-    #     pickle.dump(pe, f)
-    # with open('burn_time_data', 'wb') as f:
-    #     pickle.dump(burn_time, f)
-    # with open('thrust_data', 'wb') as f:
-    #     pickle.dump(F_t, f)
-    # with open('thrust_to_power_data', 'wb') as f:
-    #     pickle.dump(thrust_to_power, f)
+# %% - dump variables to pickle (Cd and div loss model)
+# with open('pickle/09-11-2021/Cd_and_div_loss/Tc', 'wb') as f:
+#     pickle.dump(Tc, f)
 
-    # %% - Normalize values
+# with open('pickle/09-11-2021/Cd_and_div_loss/P_t', 'wb') as f:
+#     pickle.dump(P_t, f)
 
-    normalized_burn_time = burn_time / max_burn_time
+# with open('pickle/09-11-2021/Cd_and_div_loss/p_t', 'wb') as f:
+#     pickle.dump(p_t, f)
 
-    normalized_m_initial = m_initial / m_initial[0, 0]
+# with open('pickle/09-11-2021/Cd_and_div_loss/F_t', 'wb') as f:
+#     pickle.dump(F_t, f)
 
-    max_mean_F_t, _ = find_2d_max(mean_F_t)
-    normalized_mean_thrust = mean_F_t / max_mean_F_t
+# with open('pickle/09-11-2021/Cd_and_div_loss/thrust_to_power', 'wb') as f:
+#     pickle.dump(thrust_to_power, f)
 
-    max_mean_thrust_to_power, _ = find_2d_max(mean_thrust_to_power)
-    normalized_mean_thrust_to_power = mean_thrust_to_power / max_mean_thrust_to_power
+# with open('pickle/09-11-2021/Cd_and_div_loss/m_prop_left', 'wb') as f:
+#     pickle.dump(m_prop_left, f)
 
-    w1, w2, w3, w4 = (0.4, 0.25, 0.25, 0.1)
-    score = w1 * normalized_burn_time + w2 * normalized_mean_thrust + \
-        w3 * normalized_mean_thrust_to_power + w4 * (1 - normalized_m_initial)
+# with open('pickle/09-11-2021/Cd_and_div_loss/burn_time', 'wb') as f:
+#     pickle.dump(burn_time, f)
 
-    # w1, w2, w3 = (0.4, 0.4, 0.2)
-    # score = w1*normalized_burn_time + w2*normalized_mean_thrust + w3*(1-normalized_m_initial)
+# with open('pickle/09-11-2021/Cd_and_div_loss/score', 'wb') as f:
+#     pickle.dump(score, f)
 
-    plt.figure()
-    plt.contourf(V / V_tube, p, score)
-    plt.colorbar()
-    plt.show()
+# # %% - dump variables to pickle (baseline model)
+# with open('pickle/08-11-2021/baseline_model/Tc', 'wb') as f:
+#     pickle.dump(Tc, f)
 
-    max_score_x, max_score_y = np.unravel_index(np.nanargmax(score), np.array(score).shape)
-    print(max_score_x, max_score_y)
-    # levels = [750, 950, 1250]
+# with open('pickle/08-11-2021/baseline_model/P_t', 'wb') as f:
+#     pickle.dump(P_t, f)
 
-    # p_max, V_max = np.unravel_index(np.argmax(burn_time), np.array(burn_time).shape)
+# with open('pickle/08-11-2021/baseline_model/pressure', 'wb') as f:
+#     pickle.dump(p_t, f)
 
-    # plt.figure()
-    # contour = plt.contour(V / V_tube, p, burn_time, levels=levels)
-    # plt.clabel(contour, levels, fontsize=10)
-    # # plt.plot(col, row, 'b+')
-    # plt.scatter(V[V_max] / V_tube, p[p_max], c='k', marker='x')
-    # plt.scatter(V[7] / V_tube, p[100], c='k', marker='o')
-    # plt.show()
+# with open('pickle/08-11-2021/baseline_model/F_t', 'wb') as f:
+#     pickle.dump(F_t, f)
 
-    # plt.figure()
-    # # for F in F_t:
-    # plt.plot(t, F_t * 1E3)
-    # plt.xlabel('Time [s]')
-    # plt.ylabel('Thrust [mN]')
-    # plt.legend(p)
+# with open('pickle/08-11-2021/baseline_model/thrust_to_power', 'wb') as f:
+#     pickle.dump(thrust_to_power, f)
 
-    # plt.ylim(0.1, 0.8)
-    # plt.show()
+# with open('pickle/08-11-2021/baseline_model/m_prop_left', 'wb') as f:
+#     pickle.dump(m_prop_left, f)
 
-    # %% Thrust starting phase
-    # p_in = 5E5
+# with open('pickle/08-11-2021/baseline_model/burn_time', 'wb') as f:
+#     pickle.dump(burn_time, f)
 
-    # def model(y, t, p):
-    #     c1, c2, c3, n, p_in = p
-    #     dydt = 1 / c3 * (c2 * p_in - c2 * y - c1 * y**n)
+# with open('pickle/08-11-2021/baseline_model/score', 'wb') as f:
+#     pickle.dump(score, f)
 
-    #     return dydt
 
-    # n = 0.5
+# # %% - Thrust range from baseline model
 
-    # c1 = 5E-9
-    # c2 = vlm.nozzle.At / vlm.C_star
-    # V_plenum = 0.27E-9
-    # c3 = V_plenum / (vlm.propellant.R * vlm.Tc)
+# with open('pickle/08-11-2021/baseline_model/F_t', 'rb') as f:
+#     baseline_F_t = pickle.load(f)
 
-    # p = (c1, c2, c3, n, p_in)
+# thrust_range = (np.nanmax(baseline_F_t, axis=0) - np.nanmin(baseline_F_t, axis=0)) / (3E-3 - 0.12E-3)
 
-    # # Initial conditions
-    # z0 = 0
+# plt.figure()
+# plt.contourf(V / V_tube, p, thrust_range)
 
-    # t = np.arange(0, 2E-3, 0.01E-3)
+# plt.title('Baseline model thrust range')
+# plt.xlabel('Initial volume [V/V_tube]')
+# plt.ylabel('Pressure [pa]')
 
-    # z = odeint(model, z0, t, args=(p,))
-    # y = z[:, 0]
+# plt.colorbar()
+# plt.show()
 
-    # plt.figure()
-    # plt.plot(t * 1E3, y * 1E-5)
-    # plt.show()
+# %% - Score from baseline model
 
-    # %%
-    print('hi')
+# with open('pickle/08-11-2021/baseline_model/score', 'rb') as f:
+#     baseline_score = pickle.load(f)
+# with open('pickle/08-11-2021/baseline_model/F_t', 'rb') as f:
+#     baseline_F_t = pickle.load(f)
+
+# thrust_range = (np.nanmax(baseline_F_t, axis=0) - np.nanmin(baseline_F_t, axis=0)) / (3E-3 - 0.12E-3)
+# max_thrust_range, _ = find_2d_max(thrust_range)
+# baseline_normalized_thrust_range = thrust_range / max_thrust_range
+
+# with open('pickle/08-11-2021/baseline_model/burn_time', 'rb') as f:
+#     baseline_burn_time = pickle.load(f)
+
+# baseline_max_burn_time, baseline_coords = find_2d_max(baseline_burn_time)
+# baseline_normalized_burn_time = baseline_burn_time / baseline_max_burn_time
+
+# with open('pickle/08-11-2021/baseline_model/P_t', 'rb') as f:
+#     baseline_P_t = pickle.load(f)
+
+# baseline_mean_P_t = np.nanmean(baseline_P_t, axis=0)
+# baseline_max_mean_P_t, _ = find_2d_max(baseline_mean_P_t)
+# baseline_normalized_mean_P_t = baseline_mean_P_t / baseline_max_mean_P_t
+
+# with open('pickle/08-11-2021/baseline_model/m_prop_left', 'rb') as f:
+#     baseline_m_prop_left = pickle.load(f)
+
+# baseline_max_m_prop_left, _ = find_2d_max(baseline_m_prop_left)
+# baseline_normalized_m_prop_left = baseline_m_prop_left / baseline_max_m_prop_left
+
+# w1, w2, w3, w4 = (0.40, 0.25, 0.10, 0.25)
+# baseline_score = w1 * baseline_normalized_burn_time + w2 * baseline_normalized_thrust_range + \
+#     w3 * (1 - baseline_normalized_mean_P_t) + w4 * baseline_normalized_m_prop_left
+
+# baseline_max_score, baseline_coords = find_2d_max(baseline_score)
+# score2 = copy.deepcopy(baseline_score)
+# highest_scores = []
+# for _ in range(10):
+#     highest_score, coords = find_2d_max(score2)
+#     score2[coords] = 0
+#     highest_scores.append((highest_score, coords))
+
+
+# plt.figure()
+# plt.contourf(V / V_tube, p, baseline_score / baseline_max_score)
+
+# plt.title('Baseline model score')
+# plt.xlabel('Initial volume [V/V_tube]')
+# plt.ylabel('Pressure [pa]')
+# plt.colorbar()
+
+# plt.scatter(V[baseline_coords[1]] / V_tube, p[baseline_coords[0]], marker='x', s=60, color="black")
+# plt.scatter(V[highest_scores[4][1][1]] / V_tube, p[highest_scores[4][1][0]], marker='x', s=60, color="black")
+# x_text = V[baseline_coords[1] + 2] / V_tube
+# y_text = p[baseline_coords[0] - 2]
+# plt.text(s=round(baseline_max_score, 3), x=x_text, y=y_text, horizontalalignment="left")
+# plt.text(s=round(baseline_score[87, 14], 3), x=V[14 + 2] / V_tube, y=p[87 - 2], horizontalalignment="left")
+# plt.plot()
+
+
+# # %% - Burn time surface from baseline model
+
+# with open('pickle/08-11-2021/baseline_model/burn_time', 'rb') as f:
+#     baseline_burn_time = pickle.load(f)
+
+# baseline_max_burn_time, baseline_coords = find_2d_max(baseline_burn_time[:96, :])
+
+# plt.figure()
+# plt.contourf(V / V_tube, p, baseline_burn_time / baseline_max_burn_time)
+# plt.hlines(y=125000, xmin=0.05, xmax=max(V / V_tube), color="black", linestyles='--')
+
+# plt.title('Baseline model burn time')
+# plt.xlabel('Initial volume [V/V_tube]')
+# plt.ylabel('Pressure [pa]')
+# plt.colorbar()
+
+# plt.scatter(V[baseline_coords[1]] / V_tube, p[baseline_coords[0]], marker='x', s=60, color="black")
+# x_text = V[baseline_coords[1] + 2] / V_tube
+# y_text = p[baseline_coords[0] - 2]
+# plt.text(s=f'{round(baseline_max_burn_time,3)} [s]', x=x_text, y=y_text, horizontalalignment="left")
+# plt.plot()
+
+
+# # %% - Propellant mass left from baseline model
+
+# with open('pickle/08-11-2021/baseline_model/m_prop_left', 'rb') as f:
+#     baseline_m_prop_left = pickle.load(f)
+
+# plt.figure()
+# plt.contourf(V / V_tube, p, baseline_m_prop_left * 1E3)
+
+# plt.title('Baseline model propellant mass left')
+# plt.xlabel('Initial volume [V/V_tube]')
+# plt.ylabel('Pressure [pa]')
+
+# plt.colorbar()
+# plt.show()
+
+# # Max thrust
+# plt.figure()
+# plt.contourf(V / V_tube, p, np.nanmax(baseline_F_t, axis=0))
+
+# plt.title('Baseline model max thrust')
+# plt.xlabel('Initial volume [V/V_tube]')
+# plt.ylabel('Pressure [pa]')
+
+# plt.colorbar()
+# plt.show()
+
+# # Min thrust
+# plt.figure()
+# plt.contourf(V / V_tube, p, np.nanmin(baseline_F_t, axis=0) * 1E3)
+
+# plt.title('Baseline model min thrust')
+# plt.xlabel('Initial volume [V/V_tube]')
+# plt.ylabel('Pressure [pa]')
+
+# plt.colorbar()
+# plt.show()

@@ -37,6 +37,7 @@ def mass_flow_rate(Gamma: float, pc: float, At: float, R: float, Tc: float) -> f
 def func(x, gamma, Gamma, epsilon, pc, d, e):
     """Function that relates the expansion ratio and the pressure ratio.
 
+    Equation 7-3 [Zandbergen, TRP reader, p. 52]
     - x: exhaust pressure [pa]
     - pc: chamber pressure [pa]
     - epsilon: Area ratio [-]
@@ -94,9 +95,7 @@ def calc_Cd(m_ideal, At, a, b, c):
     return Cd, Re_t
 
 
-def initialize_envelope(p, V, te, dt):
-    te = 1300
-    dt = 0.1
+def initialize_envelope(p, V, te, dt=0.1):
 
     l_tube = 0.3
     d_tube = 1.57E-3
@@ -115,6 +114,8 @@ def initialize_envelope(p, V, te, dt):
     thrust_to_power = np.zeros((len(t), len(p), len(V)))
 
     burn_time = np.zeros((len(p), len(V)))
+    m_prop_left = np.zeros((len(p), len(V)))
+    F_t_range = np.zeros((len(p), len(V)))
     while_condition = np.zeros((len(p), len(V)))
     m_initial = np.zeros((len(p), len(V)))
     m_initial_total = np.zeros((len(p), len(V)))
@@ -126,7 +127,11 @@ def initialize_envelope(p, V, te, dt):
         "while_condition": while_condition,
         "thrust_to_power": thrust_to_power,
         "F_t": F_t,
-        "P_t": P_t
+        "P_t": P_t,
+        "p_t": p_t,
+        "m_prop_left": m_prop_left,
+        "F_t_range": F_t_range,
+        "Tc": Tc_vec
     }
 
     return arrays
@@ -156,6 +161,7 @@ def calc_dp(m, rho):
 
 def calc_dF(gamma, R, Tc, pe, pc, L, m, Ae):
     Ue = exhaust_velocity(gamma, R, Tc, pe, pc)
+    # print('Ue', Ue)
 
     Te = Tc * (pe / pc)**((gamma - 1) / gamma)
 
