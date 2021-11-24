@@ -108,10 +108,7 @@ class Engine:
         # Ideal mass flow rate
         m_ideal = mass_flow_rate(self.propellant.Gamma, p_t[0], self.nozzle.At, self.propellant.R, Tc[0])
 
-        Cd, Re_t = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
-
-        # if Re_t < 100:
-        #     print('Re_t', Re_t, 'burn time', 'start')
+        # Cd, Re_t = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
 
         # m[1] = Cd * m_ideal
         m[1] = m_ideal
@@ -121,55 +118,37 @@ class Engine:
 
         pe[1], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[1], self.propellant.d, self.propellant.e)
 
-        # CF = self.propellant.Gamma * np.sqrt(2 * gamma / (gamma - 1) * (1 - (pe[1] / p_t[1]) ** ((gamma - 1) / gamma))) + pe[1] / p_t[1] * epsilon
-        CF = 1
         # F_t[1] = Isp_ref * 9.81 * m[1] * CF * np.sqrt(Tc[1]) * (1 - self.nozzle.e_div)
-        F_t[1] = Isp_ref * 9.81 * m[1] * CF * np.sqrt(Tc[1])
+        F_t[1] = Isp_ref * 9.81 * m[1] * np.sqrt(Tc[1])
         m_prop_left[1] = m_initial - m_exit[1]
 
         i = 1
 
         while F_t[i] > 0.12E-3 and m_prop_left[i] > 0.2E-3:
             i += 1
+
             p_t[i] = V0 * p0 / (V0 + m_exit[i - 1] / self.propellant.rho)
-            # print('p_t', p_t[i])
             Tc[i] = chamber_temperature(self.propellant.R, p_t[i - 1])
 
             # mass flow rate parameters
             m_ideal = mass_flow_rate(self.propellant.Gamma, p_t[i - 1], self.nozzle.At, self.propellant.R, Tc[i - 1])
-            Cd, Re_t = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
-
-            # print('Re_t', Re_t)
+            # Cd, Re_t = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
 
             # m[i] = Cd * m_ideal
             m[i] = m_ideal
-
-            # _ = calc_dp(m[i], self.propellant.rho)
 
             m_exit[i] = m_exit[i - 1] + m[i] * dt
             m_prop_left[i] = m_initial - m_exit[i]
 
             # Thrust parameters
-            pe[i], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[i], self.propellant.d, self.propellant.e, pe[i - 1])
-            # print('pressure', p_t[i])
-            # print(pe[i])
-            # eq. 8-3 from TRP reader [Zandbergen]
-            CF = self.propellant.Gamma * np.sqrt(2 * gamma / (gamma - 1) *
-                                                 (1 - (pe[i] / p_t[i])**((gamma - 1) / gamma))) + pe[i] / p_t[i] * epsilon
-            # print('CF', CF)
-            # Ue = np.sqrt()
-            # print('term 1', term_1, 'term 2', term_2)
-            CF = 1
-            Isp = Isp_ref * CF * np.sqrt(Tc[i - 1])
+            # pe[i], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[i], self.propellant.d, self.propellant.e, pe[i - 1])
+
+            Isp = Isp_ref * np.sqrt(Tc[i - 1])
             # Isp = 0.95 * np.sqrt(2 * gamma * self.propellant.R * Tc[i - 1] /
             #                      (9.81**2 * (gamma - 1)) * (1 - (pe[i] / p_t[i - 1])**(gamma / (gamma - 1))))
 
-            # print('Tc', Tc[i])
-            # dF = calc_dF(self.propellant.gamma, self.propellant.R, self.Tc, pe[i], p_t[i], self.nozzle.L, m[i], Ae)
-            # F_t[i] = (Isp * 9.81 * m[i] - dF) * (1 - self.nozzle.e_div)
             # F_t[i] = (Isp * 9.81 * m[i - 1]) * (1 - self.nozzle.e_div)
             F_t[i] = Isp * 9.81 * m[i - 1]
-            # print('dF', dF * 1E3, 'Ft', (Isp * 9.81 * m[i]) * (1 - self.nozzle.e_div) * 1E3)
 
             P_t[i] = utils.power(m[i], Tc[i], 4187)
 
@@ -179,7 +158,6 @@ class Engine:
             # dimensionless_mass_flow = m[i] * np.sqrt(self.propellant.R * self.Tc) / (self.nozzle.Ae * p_t[i])
             # print('pressure ratio', pressure_ratio, 'mass flow', dimensionless_mass_flow)
 
-        # print('CF', CF, 'ref', CF_ref, 'ref 2', CF_ref_2)
         # print('Isp eff', Isp / 135.4, Isp)
         # print('Isp', Isp)
         if F_t[i] < 0.12E-3:

@@ -64,7 +64,7 @@ def characteristic_velocity(pc, At, m):
     return pc * At / m
 
 
-def power(m, Tc, cp_liquid, Lh=2256E3, Ta=298, efficiency=0.6):
+def power(m, Tc, cp_liquid, Lh=2256E3, Ta=283, efficiency=0.6):
     return m / efficiency * (cp_liquid * (Tc - Ta) + Lh)
 
 
