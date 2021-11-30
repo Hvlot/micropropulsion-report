@@ -41,11 +41,12 @@ class Nozzle:
 
 
 class Engine:
-    def __init__(self, Tc, Dt, De, gamma, rho, M):
+    def __init__(self, Tc, Dt, De, gamma, rho, M, CASE):
         self.Tc = Tc
 
         self.nozzle = Nozzle(De, Dt)
         self.propellant = Propellant(M, gamma, rho)
+        self.CASE = CASE
 
     def isp_ideal(self) -> float:
         """Calculates the ideal specific impulse [s]
@@ -93,6 +94,7 @@ class Engine:
         F_t = np.zeros(len_t)
         P_t = np.zeros(len_t)
         Tc = np.zeros(len_t)
+        Cd = np.zeros(len_t)
         thrust_to_power = np.zeros(len_t)
 
         # Initial values
@@ -108,18 +110,26 @@ class Engine:
         # Ideal mass flow rate
         m_ideal = mass_flow_rate(self.propellant.Gamma, p_t[0], self.nozzle.At, self.propellant.R, Tc[0])
 
-        # Cd, Re_t = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
+        if self.CASE == 'baseline':
+            m[1] = m_ideal
+        elif self.CASE == 'updated_model':
+            Cd[1], Re_t = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
+            Cd[0] = Cd[1]
+            m[1] = Cd[1] * m_ideal
 
-        # m[1] = Cd * m_ideal
-        m[1] = m_ideal
         m_exit[1] = m_exit[0] + m[1] * dt
 
         V_t[1] = V0 * p_t[1] / p_t[1]
 
-        pe[1], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[1], self.propellant.d, self.propellant.e)
-
         # F_t[1] = Isp_ref * 9.81 * m[1] * CF * np.sqrt(Tc[1]) * (1 - self.nozzle.e_div)
-        F_t[1] = Isp_ref * 9.81 * m[1] * np.sqrt(Tc[1])
+        if self.CASE == 'baseline':
+            Isp = Isp_ref * np.sqrt(Tc[1])
+        elif self.CASE == 'updated_model':
+            pe[1], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[1], self.propellant.d, self.propellant.e)
+            Isp = 0.95 * np.sqrt(2 * gamma * self.propellant.R * Tc[1] /
+                                 (9.81**2 * (gamma - 1)) * (1 - (pe[1] / p_t[1])**(gamma / (gamma - 1))))
+
+        F_t[1] = Isp * 9.81 * m[1]
         m_prop_left[1] = m_initial - m_exit[1]
 
         i = 1
@@ -132,23 +142,29 @@ class Engine:
 
             # mass flow rate parameters
             m_ideal = mass_flow_rate(self.propellant.Gamma, p_t[i - 1], self.nozzle.At, self.propellant.R, Tc[i - 1])
-            # Cd, Re_t = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
 
-            # m[i] = Cd * m_ideal
-            m[i] = m_ideal
+            if self.CASE == 'baseline':
+                m[i] = m_ideal
+            elif self.CASE == 'updated_model':
+                Cd[i], Re_t = calc_Cd(m_ideal, self.nozzle.At, self.propellant.a, self.propellant.b, self.propellant.c)
+                m[i] = Cd[i] * m_ideal
 
             m_exit[i] = m_exit[i - 1] + m[i] * dt
             m_prop_left[i] = m_initial - m_exit[i]
 
             # Thrust parameters
-            # pe[i], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[i], self.propellant.d, self.propellant.e, pe[i - 1])
 
-            Isp = Isp_ref * np.sqrt(Tc[i - 1])
-            # Isp = 0.95 * np.sqrt(2 * gamma * self.propellant.R * Tc[i - 1] /
-            #                      (9.81**2 * (gamma - 1)) * (1 - (pe[i] / p_t[i - 1])**(gamma / (gamma - 1))))
+            if self.CASE == 'baseline':
+                Isp = Isp_ref * np.sqrt(Tc[i - 1])
+            elif self.CASE == 'updated_model':
+                pe[i], ier, nevals = exhaust_pressure(gamma, self.propellant.Gamma, epsilon, p_t[i], self.propellant.d, self.propellant.e, pe[i - 1])
+                Isp = 0.95 * np.sqrt(2 * gamma * self.propellant.R * Tc[i - 1] /
+                                     (9.81**2 * (gamma - 1)) * (1 - (pe[i] / p_t[i - 1])**(gamma / (gamma - 1))))
 
-            # F_t[i] = (Isp * 9.81 * m[i - 1]) * (1 - self.nozzle.e_div)
-            F_t[i] = Isp * 9.81 * m[i - 1]
+            if self.CASE == 'baseline':
+                F_t[i] = Isp * 9.81 * m[i - 1]
+            elif self.CASE == 'updated_model':
+                F_t[i] = (Isp * 9.81 * m[i - 1]) * (1 - self.nozzle.e_div)
 
             P_t[i] = utils.power(m[i], Tc[i], 4187)
 
@@ -168,4 +184,8 @@ class Engine:
 
         F_range = np.max(F_t) - F_t[i]
 
-        return burn_time, while_condition, F_t, F_range, P_t, m_prop_left[i], p_t, Tc
+        # if self.CASE == 'updated_model':
+        #     Cd[Cd == 0] = None
+        #     print('Average Cd', np.nanmean(Cd), 'min', np.nanmin(Cd), 'max')
+
+        return burn_time, m, F_t, F_range, P_t, m_prop_left[i], p_t, Tc, Cd

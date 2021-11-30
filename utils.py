@@ -112,6 +112,7 @@ def initialize_envelope(p, V, te, dt=0.1):
     P_t = np.zeros((len(t), len(p), len(V)))
     Tc_vec = np.zeros((len(t), len(p), len(V)))
     thrust_to_power = np.zeros((len(t), len(p), len(V)))
+    Cd = np.zeros((len(t), len(p), len(V)))
 
     burn_time = np.zeros((len(p), len(V)))
     m_prop_left = np.zeros((len(p), len(V)))
@@ -131,7 +132,9 @@ def initialize_envelope(p, V, te, dt=0.1):
         "p_t": p_t,
         "m_prop_left": m_prop_left,
         "F_t_range": F_t_range,
-        "Tc": Tc_vec
+        "Tc": Tc_vec,
+        "mass_flow_rate": m,
+        "thrust_coefficient": Cd
     }
 
     return arrays
@@ -139,10 +142,10 @@ def initialize_envelope(p, V, te, dt=0.1):
 
 def calc_dp(m, rho):
     """Calculate the pressure drop over the feed lines. """
-    # d_fl = 1.57E-3
-    d_fl = 4.5E-6
-    # A = np.pi / 4 * d_fl**2
-    A = d_fl * 0.1E-3
+    d_fl = 1.57E-3
+    # d_fl = 4.5E-6
+    A = np.pi / 4 * d_fl**2
+    # A = d_fl * 0.1E-3
     v = m / (A * rho)
     mu = 1.1E-5
     Re = rho * v * d_fl / mu
@@ -151,10 +154,11 @@ def calc_dp(m, rho):
     L = 0.3
 
     N_lines = L / 2E-3
-    N_bends = 200 * N_lines
+    # N_bends = 200 * N_lines
+    N_bends = 2
 
-    # dp = f * L / d_fl * 0.5 * rho * v**2 + 1.3 * N_bends * 0.5 * v**2
-    dp = 1.3 * N_bends * 0.5 * v**2
+    dp = f * L / d_fl * 0.5 * rho * v**2 + 1.3 * N_bends * 0.5 * v**2
+    # dp = 1.3 * N_bends * 0.5 * v**2
 
     return dp
 
