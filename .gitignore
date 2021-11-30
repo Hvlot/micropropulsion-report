@@ -2,3 +2,4 @@ pickle
 __pycache__
 results_report/
 *.png
+data/*
