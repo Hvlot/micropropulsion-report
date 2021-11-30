@@ -203,8 +203,8 @@ if __name__ == "__main__":
     # mean_F_t = np.nanmean(F_t, axis=0)
     mean_thrust_to_power = np.nanmean(thrust_to_power, axis=0)
 
-    # %% - Normalize values
-
+# %% - Normalize values
+    normalized_thrust_range = F_t_range / np.nanmax(F_t_range)
     normalized_burn_time = burn_time / max_burn_time
 
     normalized_m_initial = m_initial / m_initial[0, 0]
@@ -226,7 +226,6 @@ if __name__ == "__main__":
 
 # %% - Plot score
     # normalized_thrust_range = F_t_range / (F_req_max - F_req_min)
-    normalized_thrust_range = F_t_range / np.nanmax(F_t_range)
 
     w1, w2, w3, w4 = (0.40, 0.25, 0.10, 0.25)
     score = w1 * normalized_burn_time + w2 * normalized_thrust_range + \
