@@ -37,12 +37,18 @@ m_initial = np.zeros((len(p), len(V)))
 m_initial_total = np.zeros((len(p), len(V)))
 
 
+def percentage_loss(val1, val2):
+    if val1 > val2:
+        raise ValueError('Value 1 should be smaller than value 2')
+    return (1 - val1 / val2) * 100
+
+
 def find_2d_max(arr):
     coordinates = np.unravel_index(np.nanargmax(arr), np.array(arr).shape)
     return arr[coordinates], coordinates
 
 
-def plot_contour(var, title, label, show_max=False, max_pressure_idx=95, *args, **kwargs):
+def plot_contour(var, title, label, show_max=False, max_annotation=False, show_max_score=False, max_pressure_idx=95, *args, **kwargs):
     plt.figure()
     plt.contourf(V / V_tube, p, var)
     plt.colorbar(label=label)
@@ -52,22 +58,37 @@ def plot_contour(var, title, label, show_max=False, max_pressure_idx=95, *args, 
     plt.xlabel('V/V_tube [-]')
     plt.ylabel('Pressure [Pa]')
 
-    if show_max:
-        max_var_score, (max_y, max_x) = find_2d_max(var[:max_pressure_idx, :])
-        plt.scatter(V[max_x] / V_tube, p[max_y],
+    line = kwargs.get('hlines', {})
+    color = line.get('color', 'black')
+
+    if show_max_score:
+        plt.scatter(V[max_score_y] / V_tube, p[max_score_x],
                     s=60,
                     marker='x',
-                    color='black')
+                    color=line.get('color', 'black'))
+        # plt.text(x=V[max_score_y - kwargs.get('shift_left', 0)] / V_tube, y=p[max_score_x - kwargs.get('shift_down', 0)],
+        #          s=f'{max_score:.3f}', horizontalalignment="left")
 
-        plt.text(x=V[max_x - kwargs.get('shift_left', 0)] / V_tube, y=p[max_y - kwargs.get('shift_down', 0)],
-                 s=f'{max_var_score:.3f}', horizontalalignment="left")
+    elif show_max:
+        max_var_score, (max_x, max_y) = find_2d_max(var[:max_pressure_idx, :])
+        plt.scatter(V[max_y] / V_tube, p[max_x],
+                    s=60,
+                    marker='x',
+                    color=line.get('color', 'black'))
 
-    if y := kwargs.get('hlines'):
+        print('max annotation', max_annotation)
+        if max_annotation:
+
+            plt.text(x=V[max_y - kwargs.get('shift_left', 0)] / V_tube, y=p[max_x - kwargs.get('shift_down', 0)],
+                     s=f'{max_var_score:.3f}', horizontalalignment="left")
+
+    if line:
+        y = line['y']
         plt.hlines(
             y=y,
             xmin=np.min(V) / V_tube,
             xmax=np.max(V) / V_tube,
-            color='black',
+            color=color,
             linestyle='--')
 
     plt.show()
@@ -198,12 +219,18 @@ if __name__ == "__main__":
     F_t[F_t == 0] = None
     P_t[P_t == 0] = None
     m_prop_left[m_prop_left == 0] = None
+    Tc[Tc == 0] = None
+    mass_flow_rate[mass_flow_rate == 0] = None
+    if vlm.CASE == 'updated_model':
+        Cd[Cd == 0] = None
+
     thrust_to_power = F_t / P_t
     # thrust_to_power[thrust_to_power == 0] = None
     # mean_F_t = np.nanmean(F_t, axis=0)
     mean_thrust_to_power = np.nanmean(thrust_to_power, axis=0)
 
 # %% - Normalize values
+    # normalized_thrust_range = F_t_range / (F_req_max - F_req_min)
     normalized_thrust_range = F_t_range / np.nanmax(F_t_range)
     normalized_burn_time = burn_time / max_burn_time
 
@@ -224,51 +251,143 @@ if __name__ == "__main__":
     max_mean_thrust_to_power, _ = find_2d_max(mean_thrust_to_power)
     normalized_mean_thrust_to_power = mean_thrust_to_power / max_mean_thrust_to_power
 
+    Isp = F_t / ((1 - 0.0670) * 9.81 * mass_flow_rate)
+
 # %% - Plot score
-    # normalized_thrust_range = F_t_range / (F_req_max - F_req_min)
 
-    w1, w2, w3, w4 = (0.40, 0.25, 0.10, 0.25)
-    score = w1 * normalized_burn_time + w2 * normalized_thrust_range + \
-        w3 * (1 - normalized_mean_P_t) + w4 * normalized_m_prop_left
+    weights = (
+        (0.40, 0.30, 0.05, 0.25),
+        (0.40, 0.40, 0.05, 0.15),
+        (0.40, 0.25, 0.05, 0.30),
+        (0.35, 0.25, 0.15, 0.25),
+        (0.30, 0.25, 0.20, 0.25),
+        (0.25, 0.25, 0.25, 0.25),
+        (0.20, 0.30, 0.20, 0.30),
+        (0.40, 0.25, 0.10, 0.25),
+    )
 
-    # for (x, y), elem in np.ndenumerate(score):
-    #     if np.nanmax(P_t[:, x, y]) >= 4.0:
-    #         score[x, y] = 0
-    #     if p[x] > 125000:
-    #         score[x, y] = 0
+    for weight in weights:
+        w1, w2, w3, w4 = weight
+        if sum((w1, w2, w3, w4)) != 1:
+            raise ValueError('Sum of weights not equal to 1')
+        score = w1 * normalized_burn_time + w2 * normalized_thrust_range + \
+            w3 * (1 - normalized_mean_P_t) + w4 * normalized_m_prop_left
 
-    max_score, coords = find_2d_max(score[:p_max_idx, :])
+        max_score, coords = find_2d_max(score[:p_max_idx, :])
 
-    best_scores = []
-    score2 = copy.deepcopy(score)
-    best_score, coordinates = find_2d_max(score2[:p_max_idx, :])
-    while best_score >= 0.98 * max_score:
+        best_scores = []
+        score2 = copy.deepcopy(score)
         best_score, coordinates = find_2d_max(score2[:p_max_idx, :])
-        best_scores.append((best_score, coordinates))
-        score2[coordinates] = 0
-    # print(best_scores)
-    max_score_x, max_score_y = coords
+        while best_score >= 0.98 * max_score:
+            best_score, coordinates = find_2d_max(score2[:p_max_idx, :])
+            best_scores.append((best_score, coordinates))
+            score2[coordinates] = 0
+        # print(best_scores)
+        max_score_x, max_score_y = coords
 
-    plt.figure()
-    plt.contourf(V / V_tube, p, score)
-    plt.colorbar()
+        # if vlm.CASE == 'baseline':
+        #     plot_contour(score, 'Baseline model score', '-', show_max=True, hlines=p[p_max_idx], shift_left = -2, shift_down = 2)
+        # elif vlm.CASE == 'updated_model':
+        #     plot_contour(score, 'Updated model score', '-', show_max=True, hlines=p[p_max_idx])
 
-    if vlm.CASE == 'baseline':
-        plt.title('Baseline model score')
-    elif vlm.CASE == 'updated_model':
-        plt.title('Updated model score')
-    plt.xlabel('Initial volume [V/V_tube]')
-    plt.ylabel('Pressure [pa]')
+        print('weights', weight)
+        print(f'{max_score:.3f}, {p[max_score_x]*1E-5:.2f}, {V[max_score_y] / V_tube:.3f}')
+        print(f'N > 98% max score: {len(best_scores)}')
+        print()
 
-    plt.scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="black")
-    x_text = V[max_score_y + 2] / V_tube
-    y_text = p[max_score_x - 2]
-    plt.text(s=round(max_score, 3), x=x_text, y=y_text, horizontalalignment="left")
+# %% - Print operational envelope
+    print(f'Operational envelope for p0 = {p[max_score_x]*1E-5:.2f} bar, V0/V_tube = {V[max_score_y]/V_tube:.3f}')
+    print(f'Max burn time: \t\t {max_burn_time:.1f} s')
+    print(f'Thrust range: \t\t {F_t_range[max_score_x, max_score_y]*1E3:.3f} mN')
+    print(f'Maximum thrust: \t {np.nanmax(F_t[:, max_score_x, max_score_y])*1E3:.3f} mN')
+    print(f'Initial propellant: \t {m_initial[max_score_x, max_score_y]*1E3:.3f} g')
+    print(f'Remaining propellant: \t {m_prop_left[max_score_x, max_score_y]*1E3:.3f} g')
+    print(f'Average Isp: \t\t {np.nanmean(Isp[:, max_score_x, max_score_y]):.3f} s')
 
-    plt.show()
+# %% - Plot some things for the updated model
+    if vlm.CASE == 'updated_model':
+        title = 'Burn time (updated_model)'
+    elif vlm.CASE == 'baseline':
+        title = 'Burn time (baseline)'
+    plot_contour(
+        burn_time,
+        title,
+        's',
+        show_max=True,
+        max_annotation=True,
+        hlines={'y': p[p_max_idx]},
+        max_pressure_idx=p_max_idx,
+        shift_left=-2,
+        shift_down=2
+    )
 
-    print(max_score, p[max_score_x], V[max_score_y] / V_tube)
-    print(f'N > 98% max score: {len(best_scores)}')
+    if vlm.CASE == 'updated_model':
+        title = 'Score (updated model)'
+    elif vlm.CASE == 'baseline':
+        title = 'Score (baseline)'
+    plot_contour(
+        score,
+        title,
+        '-',
+        show_max=True,
+        max_annotation=True,
+        hlines={'y': p[p_max_idx]},
+        max_pressure_idx=p_max_idx,
+        shift_left=-2,
+        shift_down=2
+    )
+
+    if vlm.CASE == 'updated_model':
+        title = 'Mean chamber temperature (updated model)'
+    elif vlm.CASE == 'baseline':
+        title = 'Mean chamber temperature (baseline)'
+    plot_contour(
+        np.nanmean(Tc, axis=0),
+        title,
+        'K',
+        show_max_score=True,
+        hlines={'y': p[p_max_idx]},
+        shift_left=-2,
+        shift_down=2
+    )
+
+    if vlm.CASE == 'updated_model':
+        plot_contour(
+            np.nanmean(Cd, axis=0),
+            'Discharge coefficient',
+            '-',
+            hlines={'y': p[p_max_idx]},
+            shift_left=-2,
+            show_max_score=True,
+            shift_down=2
+        )
+
+    if vlm.CASE == 'updated_model':
+        title = 'Thrust range (updated_model)'
+    elif vlm.CASE == 'baseline':
+        title = 'Thrust range (baseline)'
+    plot_contour(
+        F_t_range * 1E3,
+        title,
+        'mN',
+        show_max_score=True,
+        hlines={'y': p[p_max_idx]},
+        shift_left=-2,
+        shift_down=2
+    )
+    if vlm.CASE == 'updated_model':
+        title = 'Propellant mass left (updated_model)'
+    elif vlm.CASE == 'baseline':
+        title = 'Propellant mass left (baseline)'
+    plot_contour(
+        m_prop_left * 1E3,
+        title,
+        'g',
+        show_max_score=True,
+        hlines={'y': p[p_max_idx], 'color': 'white'},
+        shift_left=-2,
+        shift_down=2
+    )
 
 # # %% - Plot contours
 #     fig, axs = plt.subplots(3, 2, figsize=(12, 6))
@@ -307,503 +426,213 @@ if __name__ == "__main__":
 #     plt.tight_layout()
 #     plt.show()
 
-# %% - dump variables to pickle (Cd and div loss model)
-# with open('pickle/09-11-2021/Cd_and_div_loss/Tc', 'wb') as f:
-#     pickle.dump(Tc, f)
-
-# with open('pickle/09-11-2021/Cd_and_div_loss/P_t', 'wb') as f:
-#     pickle.dump(P_t, f)
-
-# with open('pickle/09-11-2021/Cd_and_div_loss/p_t', 'wb') as f:
-#     pickle.dump(p_t, f)
-
-# with open('pickle/09-11-2021/Cd_and_div_loss/F_t', 'wb') as f:
-#     pickle.dump(F_t, f)
-
-# with open('pickle/09-11-2021/Cd_and_div_loss/thrust_to_power', 'wb') as f:
-#     pickle.dump(thrust_to_power, f)
-
-# with open('pickle/09-11-2021/Cd_and_div_loss/m_prop_left', 'wb') as f:
-#     pickle.dump(m_prop_left, f)
-
-# with open('pickle/09-11-2021/Cd_and_div_loss/burn_time', 'wb') as f:
-#     pickle.dump(burn_time, f)
-
-# with open('pickle/09-11-2021/Cd_and_div_loss/score', 'wb') as f:
-#     pickle.dump(score, f)
-
-# # %% - dump variables to pickle (baseline model)
-# with open('pickle/08-11-2021/baseline_model/Tc', 'wb') as f:
-#     pickle.dump(Tc, f)
-
-# with open('pickle/08-11-2021/baseline_model/P_t', 'wb') as f:
-#     pickle.dump(P_t, f)
-
-# with open('pickle/08-11-2021/baseline_model/pressure', 'wb') as f:
-#     pickle.dump(p_t, f)
-
-# with open('pickle/08-11-2021/baseline_model/F_t', 'wb') as f:
-#     pickle.dump(F_t, f)
-
-# with open('pickle/08-11-2021/baseline_model/thrust_to_power', 'wb') as f:
-#     pickle.dump(thrust_to_power, f)
-
-# with open('pickle/08-11-2021/baseline_model/m_prop_left', 'wb') as f:
-#     pickle.dump(m_prop_left, f)
-
-# with open('pickle/08-11-2021/baseline_model/burn_time', 'wb') as f:
-#     pickle.dump(burn_time, f)
-
-# with open('pickle/08-11-2021/baseline_model/score', 'wb') as f:
-#     pickle.dump(score, f)
-
-
-# # %% - Thrust range from baseline model
-
-# with open('pickle/08-11-2021/baseline_model/F_t', 'rb') as f:
-#     baseline_F_t = pickle.load(f)
-
-# thrust_range = (np.nanmax(baseline_F_t, axis=0) - np.nanmin(baseline_F_t, axis=0)) / (3E-3 - 0.12E-3)
-
-# plt.figure()
-# plt.contourf(V / V_tube, p, thrust_range)
-
-# plt.title('Baseline model thrust range')
-# plt.xlabel('Initial volume [V/V_tube]')
-# plt.ylabel('Pressure [pa]')
-
-# plt.colorbar()
-# plt.show()
-
-# %% - Score from baseline model
-
-# with open('pickle/08-11-2021/baseline_model/score', 'rb') as f:
-#     baseline_score = pickle.load(f)
-# with open('pickle/08-11-2021/baseline_model/F_t', 'rb') as f:
-#     baseline_F_t = pickle.load(f)
-
-# thrust_range = (np.nanmax(baseline_F_t, axis=0) - np.nanmin(baseline_F_t, axis=0)) / (3E-3 - 0.12E-3)
-# max_thrust_range, _ = find_2d_max(thrust_range)
-# baseline_normalized_thrust_range = thrust_range / max_thrust_range
-
-# with open('pickle/08-11-2021/baseline_model/burn_time', 'rb') as f:
-#     baseline_burn_time = pickle.load(f)
-
-# baseline_max_burn_time, baseline_coords = find_2d_max(baseline_burn_time)
-# baseline_normalized_burn_time = baseline_burn_time / baseline_max_burn_time
-
-# with open('pickle/08-11-2021/baseline_model/P_t', 'rb') as f:
-#     baseline_P_t = pickle.load(f)
-
-# baseline_mean_P_t = np.nanmean(baseline_P_t, axis=0)
-# baseline_max_mean_P_t, _ = find_2d_max(baseline_mean_P_t)
-# baseline_normalized_mean_P_t = baseline_mean_P_t / baseline_max_mean_P_t
-
-# with open('pickle/08-11-2021/baseline_model/m_prop_left', 'rb') as f:
-#     baseline_m_prop_left = pickle.load(f)
-
-# baseline_max_m_prop_left, _ = find_2d_max(baseline_m_prop_left)
-# baseline_normalized_m_prop_left = baseline_m_prop_left / baseline_max_m_prop_left
-
-# w1, w2, w3, w4 = (0.40, 0.25, 0.10, 0.25)
-# baseline_score = w1 * baseline_normalized_burn_time + w2 * baseline_normalized_thrust_range + \
-#     w3 * (1 - baseline_normalized_mean_P_t) + w4 * baseline_normalized_m_prop_left
-
-# baseline_max_score, baseline_coords = find_2d_max(baseline_score)
-# score2 = copy.deepcopy(baseline_score)
-# highest_scores = []
-# for _ in range(10):
-#     highest_score, coords = find_2d_max(score2)
-#     score2[coords] = 0
-#     highest_scores.append((highest_score, coords))
-
-
-# plt.figure()
-# plt.contourf(V / V_tube, p, baseline_score / baseline_max_score)
-
-# plt.title('Baseline model score')
-# plt.xlabel('Initial volume [V/V_tube]')
-# plt.ylabel('Pressure [pa]')
-# plt.colorbar()
-
-# plt.scatter(V[baseline_coords[1]] / V_tube, p[baseline_coords[0]], marker='x', s=60, color="black")
-# plt.scatter(V[highest_scores[4][1][1]] / V_tube, p[highest_scores[4][1][0]], marker='x', s=60, color="black")
-# x_text = V[baseline_coords[1] + 2] / V_tube
-# y_text = p[baseline_coords[0] - 2]
-# plt.text(s=round(baseline_max_score, 3), x=x_text, y=y_text, horizontalalignment="left")
-# plt.text(s=round(baseline_score[87, 14], 3), x=V[14 + 2] / V_tube, y=p[87 - 2], horizontalalignment="left")
-# plt.plot()
-
-
-# # %% - Burn time surface from baseline model
-
-# with open('pickle/08-11-2021/baseline_model/burn_time', 'rb') as f:
-#     baseline_burn_time = pickle.load(f)
-
-# baseline_max_burn_time, baseline_coords = find_2d_max(baseline_burn_time[:96, :])
-
-# plt.figure()
-# plt.contourf(V / V_tube, p, baseline_burn_time / baseline_max_burn_time)
-# plt.hlines(y=125000, xmin=0.05, xmax=max(V / V_tube), color="black", linestyles='--')
-
-# plt.title('Baseline model burn time')
-# plt.xlabel('Initial volume [V/V_tube]')
-# plt.ylabel('Pressure [pa]')
-# plt.colorbar()
-
-# plt.scatter(V[baseline_coords[1]] / V_tube, p[baseline_coords[0]], marker='x', s=60, color="black")
-# x_text = V[baseline_coords[1] + 2] / V_tube
-# y_text = p[baseline_coords[0] - 2]
-# plt.text(s=f'{round(baseline_max_burn_time,3)} [s]', x=x_text, y=y_text, horizontalalignment="left")
-# plt.plot()
-
 
 # # %% - Propellant mass left from baseline model
 
 # with open('pickle/08-11-2021/baseline_model/m_prop_left', 'rb') as f:
 #     baseline_m_prop_left = pickle.load(f)
 
+# plot_contour(baseline_m_prop_left*1E3, )
 # plt.figure()
-# plt.contourf(V / V_tube, p, baseline_m_prop_left * 1E3)
-
-# plt.title('Baseline model propellant mass left')
-# plt.xlabel('Initial volume [V/V_tube]')
-# plt.ylabel('Pressure [pa]')
-
-# plt.colorbar()
-# plt.show()
-
-# # Max thrust
-# plt.figure()
-# plt.contourf(V / V_tube, p, np.nanmax(baseline_F_t, axis=0))
-
-# plt.title('Baseline model max thrust')
-# plt.xlabel('Initial volume [V/V_tube]')
-# plt.ylabel('Pressure [pa]')
-
-# plt.colorbar()
-# plt.show()
-
-# # Min thrust
-# plt.figure()
-# plt.contourf(V / V_tube, p, np.nanmin(baseline_F_t, axis=0) * 1E3)
-
-# plt.title('Baseline model min thrust')
-# plt.xlabel('Initial volume [V/V_tube]')
-# plt.ylabel('Pressure [pa]')
-
-# plt.colorbar()
-# plt.show()
-
-# # %% - Plot line of best scores
-# best_scores = []
-# score2 = copy.deepcopy(score)
-# best_score, coordinates = find_2d_max(score2)
-# best_burn_time = burn_time[coordinates]
-# best_thrust_range = F_t_range[coordinates]
-# # while (best_score >= 0.95 * max_score
-# #        and best_burn_time > 0.95 * burn_time[max_score_x, max_score_y]
-# #        and best_thrust_range > 0.9 * F_t_range[max_score_x, max_score_y]):
-# while best_score >= 0.95 * max_score:
-#     best_score, coordinates = find_2d_max(score2)
-#     best_burn_time = burn_time[coordinates]
-#     best_thrust_range = F_t_range[coordinates]
-#     best_scores.append((best_score, coordinates))
-#     score2[coordinates] = 0
-
-# best_score_1 = best_scores[4]
-# best_score_2 = best_scores[10]
-# best_score_3 = best_scores[17]
-# best_score_4 = best_scores[29]
-# best_score_5 = best_scores[-5]
-
-# x2 = best_score_1[1][1]
-# y2 = best_score_1[1][0]
-# x3 = best_score_2[1][1]
-# y3 = best_score_2[1][0]
-# x4 = best_score_3[1][1]
-# y4 = best_score_3[1][0]
-# x5 = best_score_4[1][1]
-# y5 = best_score_4[1][0]
-# # x6 = best_score_5[1][1]
-# # y6 = best_score_5[1][0]
-
-# x = [V[max_score_y] / V_tube, V[x2] / V_tube, V[x3] / V_tube, V[x4] / V_tube, V[x5] / V_tube]
-# y = [p[max_score_x], p[y2], p[y3], p[y4], p[y5]]
-
-# plt.figure()
-# plt.contourf(V / V_tube, p, score)
-# plt.colorbar()
-
-# plt.title('Baseline model score')
-# plt.xlabel('Initial volume [V/V_tube]')
-# plt.ylabel('Pressure [pa]')
-
-# plt.scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color="black")
-# plt.scatter(V[x5] / V_tube, p[y5], marker='x', s=60, color="black")
-# # plt.scatter(V[x3] / V_tube, p[y3], marker='x', s=60, color="black")
-# plt.plot(x, y)
-
-# x_text = V[max_score_y + 2] / V_tube
-# y_text = p[max_score_x - 2]
-# x_text_2 = V[x5 + 2] / V_tube
-# y_text_2 = p[y5 - 2]
-# # x_text_3 = V[x3 + 2] / V_tube
-# # y_text_3 = p[y3 - 2]
-
-# plt.text(s=f'{round(max_score, 3)}, {burn_time[max_score_x, max_score_y]}', x=x_text, y=y_text, horizontalalignment="left")
-# plt.text(s=f'{round(best_score_4[0], 3)}, {round(burn_time[y5, x5], 1)}', x=x_text_2, y=y_text_2, horizontalalignment="left")
-# # plt.text(s=f'{round(best_score_3[0], 3)}, {burn_time[y3, x3]}', x=x_text_3, y=y_text_3, horizontalalignment="left")
-
-# plt.show()
-
-# V1 = round(V[max_score_y] / V_tube, 3)
-# V2 = round(V[x5] / V_tube, 3)
-# V3 = round(V[x3] / V_tube, 3)
-
-# p1 = round(p[max_score_x] * 1E-5, 2)
-# p2 = round(p[y5] * 1E-5, 2)
-# p3 = round(p[y3] * 1E-5, 2)
-
-# max_P_t = np.nanmax(P_t, axis=0)
-
-# plt.figure()
-# plt.plot(t, P_t[:, max_score_x, max_score_y], label=f'p: {p1}, V: {V1}')
-# plt.plot(t, P_t[:, y5, x5], label=f'p: {p2}, V: {V2}')
-
-# plt.title('Input power')
-# plt.xlabel('Time [s]')
-# plt.ylabel('Power [W]')
-# plt.ylim((0.5, 4))
-# plt.legend()
-# plt.grid()
-# plt.show()
-
-# print(f'Propellant mass left: {round(m_prop_left[max_score_x, max_score_y]*1E3, 4)} g (p: {p1}, V: {V1})')
-# print(f'Propellant mass left: {round(m_prop_left[y5, x5]*1E3, 4)} g (p: {p2}, V: {V2})')
-# print(f'Propellant mass left: {round(m_prop_left[y3, x3]*1E3, 4)} g (p: {p3}, V: {V3})')
-
-# print()
-
-# print(f'Thrust range: {round(F_t_range[max_score_x, max_score_y]*1E3, 4)} mN (p: {p1}, V: {V1})')
-# percentage_difference = 100 - F_t_range[y5, x5] / F_t_range[max_score_x, max_score_y] * 100
-# percentage_difference_2 = 100 - F_t_range[y3, x3] / F_t_range[max_score_x, max_score_y] * 100
-# print(f'Thrust range: {round(F_t_range[y5, x5]*1E3, 4)} mN (-{round(percentage_difference, 1)}%) (p: {p2}, V: {V2})')
-# print(f'Thrust range: {round(F_t_range[y3, x3]*1E3, 4)} mN (-{round(percentage_difference_2, 1)}%) (p: {p3}, V: {V3})')
-
-# print()
-
-# print(f'Maximum power: {round(max_P_t[max_score_x, max_score_y], 2)} W (p: {p1}, V: {V1})')
-# percentage_difference = 100 - max_P_t[y5, x5] / max_P_t[max_score_x, max_score_y] * 100
-# percentage_difference_2 = 100 - max_P_t[y3, x3] / max_P_t[max_score_x, max_score_y] * 100
-# print(f'Maximum power: {round(max_P_t[y5, x5], 2)} W (-{round(percentage_difference, 1)}%) (p: {p2}, V: {V2})')
-# print(f'Maximum power: {round(max_P_t[y3, x3], 2)} W (-{round(percentage_difference_2, 1)}%) (p: {p3}, V: {V3})')
-
-# # %% - All feasible solutions
-# best_scores = []
-# score2 = copy.deepcopy(score)
-# best_score, coordinates = find_2d_max(score2[:p_max_idx, :])
-# best_burn_time = burn_time[coordinates]
-# best_thrust_range = F_t_range[coordinates]
-# for i in score2:
-#     # while best_score >= 0.95 * max_score:
-#     best_score, coordinates = find_2d_max(score2[:p_max_idx, :])
-#     best_burn_time = burn_time[coordinates]
-#     best_thrust_range = F_t_range[coordinates]
-#     # if (best_score >= 0.95 * max_score
-#     #     and best_burn_time > 0.95 * burn_time[max_score_x, max_score_y]
-#     #     and best_thrust_range > 0.90 * F_t_range[max_score_x, max_score_y]
-#     #         and np.nanmax(P_t[:, coordinates]) < 3.7):
-#     # if (best_burn_time > 0.97 * burn_time[max_score_x, max_score_y]
-#     #     and best_thrust_range > 0.85 * F_t_range[max_score_x, max_score_y]):
-#     if best_score >= 0.98 * max_score:
-#         best_scores.append((best_score, coordinates))
-#     score2[coordinates] = 0
-
-# plt.figure()
-# plt.contourf(V[5:20] / V_tube, p[85:110], score[85:110, 5:20], alpha=0.5)
-# plt.xlabel('V/V_tube [-]')
-# plt.ylabel('Pressure [Pa]')
-# plt.title('Score')
-# plt.grid(alpha=0.3)
-# plt.colorbar()
-
-# p_min = min(map(lambda x: x[1][0], best_scores))
-# V_max = max(map(lambda x: x[1][1], best_scores))
-
-# for i in best_scores:
-#     # Janky way of taking the first point
-#     if i[0] == max_score:
-#         print('i', i, 'V', V[i[1][1]] / V_tube, 'p', p[i[1][0]])
-#         plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="red")
-#     # elif p[i[1][0]] < 109000 and V[i[1][1]]/V_tube >= 0.12:
-#     #     print('i', i, 'V', V[i[1][1]] / V_tube, 'p', p[i[1][0]])
-#     #     plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="orange")
-#     elif m_prop_left[i[1]] > 0.2E-3:
-#         plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="cyan")
-#     elif F_t_range[i[1]] > F_t_range[max_score_x, max_score_y]:
-#         plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="orange")
-#     else:
-#         plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="black")
-#     # plt.scatter(V[V_max] / V_tube, p[p_min], marker='x', s=15, color="orange")
-
-# # %% - Compare two extremes on the score contour
-# point_1 = (max_score_x, max_score_y)
-# p_min = min(map(lambda x: x[1][0], best_scores))
-# V_max = max(map(lambda x: x[1][1], best_scores))
-# point_2 = (p_min, V_max)
-
-# # Input power
-# plt.figure()
-# plt.plot(t, P_t[:, max_score_x, max_score_y], label=f'V/V_tube: {round(V[max_score_y]/V_tube, 3)}, p: {round(p[max_score_x]*1E-5, 3)} bar')
-# plt.plot(t, P_t[:, p_min, V_max], label=f'V/V_tube: {round(V[V_max]/V_tube, 3)}, p: {p[p_min]*1E-5} bar')
-
-# plt.legend()
-# plt.grid(alpha=0.5)
-# plt.title('Input power')
-# plt.xlabel('Time [s]')
-# plt.ylabel('Power [W]')
-
-# plt.show()
-
-# # Thrust
-# plt.figure()
-# plt.plot(t[3:], F_t[3:, max_score_x, max_score_y] * 1E3, label=f'V/V_tube: {V[max_score_y]/V_tube:.3f}, p: {p[max_score_x]*1E-5:.3f} bar')
-# plt.plot(t[3:], F_t[3:, p_min, V_max] * 1E3, label=f'V/V_tube: {V[V_max]/V_tube:.3f}, p: {p[p_min]*1E-5} bar')
-
-# plt.legend()
-# plt.grid(alpha=0.5)
-# plt.title('Thrust')
-# plt.xlabel('Time [s]')
-# plt.ylabel('Thrust [mN]')
-
-# plt.show()
-
-# coords_max_score = f'(V/V_tube: {V[max_score_y]/V_tube:.3f}, p: {p[max_score_x]*1E-5:.3f} bar)'
-# coords_suboptimal = f'(V/V_tube: {V[V_max]/V_tube:.3f}, p: {p[p_min]*1E-5} bar)'
-
-# percentage_difference = (1-burn_time[p_min, V_max]/max_burn_time)*100
-
-# print(f'Burn time: {max_burn_time} [s] {coords_max_score}')
-# print(f'Burn time: {burn_time[p_min, V_max]:.1f} [s] -{percentage_difference:.2f}% {coords_suboptimal}')
-
-# print(f'Maximum thrust: {np.nanmax(F_t[:, max_score_x, max_score_y]*1E3):.2f} [mN] {coords_max_score}')
-# print(f'Maximum thrust: {np.nanmax(F_t[:, p_min, V_max]*1E3):.2f} [mN] {coords_suboptimal}')
-
-# print(f'Maximum input power: {np.nanmax(P_t[:, max_score_x, max_score_y]):.2f} [W] {coords_max_score}')
-# print(f'Maximum input power: {np.nanmax(P_t[:, p_min, V_max]):.2f} [W] {coords_suboptimal}')
-
-# print(f'Propellant mass left: {m_prop_left[max_score_x, max_score_y]*1E3:.3f} [g] {coords_max_score}')
-# print(f'Propellant mass left: {m_prop_left[p_min, V_max]*1E3:.3f} [g] {coords_suboptimal}')
-
-# # %% - Thrust range gradient
-
-# grad = np.gradient(F_t_range[:-1,:-1]*1E3)
-# mag_grad = np.sqrt(grad[0]**2+grad[1]**2)
-
-# plt.figure(figsize=(7,4))
-
-# plt.contour(V[:-1]/V_tube, p[:-1], F_t_range[:-1,:-1]*1E3)
-# # plt.pcolor(V[:-1]/V_tube, p[:-1], F_t_range[:-1,:-1]*1E3, cmap='plasma')
-# # plt.colorbar(label='Thrust range [mN]')
-
-
-# plt.contourf(V[:-1]/V_tube, p[:-1], mag_grad, cmap="plasma")
-# plt.pcolor(V[:-1]/V_tube, p[:-1], mag_grad[:-1,:-1], cmap='plasma', vmin=0.00555, vmax=0.00561)
-# plt.colorbar(label=r'$|\nabla \Delta F|$')
-# plt.scatter(V[10]/V_tube, p[80], marker='x', s=60, color='black')
-# plt.scatter(V[10]/V_tube, p[40], marker='x', s=60, color='black')
-# plt.scatter(V[20]/V_tube, p[40], marker='x', s=60, color='black')
-
-# plt.title('Thrust range')
-# plt.xlabel('V/V_tube')
-# plt.ylabel('Pressure [Pa]')
-
-# plt.tight_layout()
-
-# # %% - Burn time gradient
-
-# grad = np.gradient(burn_time[:-1, :-1])
-# mag_grad = np.sqrt(grad[0]**2+grad[1]**2)
-
-# plt.figure(figsize=(7,4))
-# plt.contour(V[:-1]/V_tube, p[:-1], burn_time[:-1, :-1])
-# plt.colorbar(label='Burn time [s]')
-# plt.contourf(V[:-1]/V_tube, p[:-1], mag_grad, cmap="plasma")
-# plt.colorbar(label=r'$|\nabla t_b|$')
-# plt.scatter(V[max_score_y]/V_tube, p[max_score_x], marker='x', s=60, color='black')
-
-# plt.title('Burn time')
-# plt.xlabel('V/V_tube')
-# plt.ylabel('Pressure [Pa]')
-
-# plt.tight_layout()
-
-# # %% - Propellant mass left gradient
-
-# grad = np.gradient(m_prop_left*1E3)
-# mag_grad = np.sqrt(grad[0]**2+grad[1]**2)
-
-# plt.figure(figsize=(7,4))
-# plt.contour(V/V_tube, p, m_prop_left*1E3)
-# plt.colorbar(label='Propellant mass left [g]')
-# plt.contourf(V/V_tube, p, mag_grad, cmap="plasma")
-# plt.colorbar(label=r'$|\nabla m|$')
-# plt.scatter(V[max_score_y]/V_tube, p[max_score_x], marker='x', s=60, color='white')
-
-# plt.title('Propellant mass left - gradient')
-# plt.xlabel('V/V_tube')
-# plt.ylabel('Pressure [Pa]')
-
-# plt.tight_layout()
-
-# # %% - Mean input power
-
-# grad = np.gradient(1-normalized_mean_P_t)
-# mag_grad = np.sqrt(grad[0]**2+grad[1]**2)
-
-# plt.figure(figsize=(7,4))
-
-# plt.contour(V/V_tube, p, 1-normalized_mean_P_t)
-# plt.pcolor(V/V_tube, p, 1-normalized_mean_P_t, cmap="plasma")
-# plt.colorbar(label='Mean input power [W]')
-# plt.contourf(V/V_tube, p, mag_grad, cmap="plasma")
-# plt.pcolor(V/V_tube, p, mag_grad, vmin=0, vmax=0.014, cmap="plasma")
-# plt.colorbar(label=r'$|\nabla P_{input}|$')
-# plt.scatter(V[max_score_y]/V_tube, p[max_score_x], marker='x', s=60, color='white')
-
-# plt.title('Mean input power')
-# plt.xlabel('V/V_tube')
-# plt.ylabel('Pressure [Pa]')
-
-# plt.tight_layout()
-
-# # %% - Thrust range vs mean thrust
-# p1_idx = 95
-# V1_idx = 2
-# p2_idx = -2
-# V2_idx = -2
-
-# print(f'Top left: {np.nanmean(F_t[:, 95, 2])*1E3:.3f} mN')
-# print(f'Top right: {np.nanmean(F_t[:, -2, -2])*1E3:.3f} mN')
-
-# plt.plot(t[3:], F_t[3:, p1_idx, V1_idx]*1E3, label=f'p: {p[p1_idx]*1E-5:.2f} bar, V/V_tube: {V[V1_idx]/V_tube:.2f}')
-# plt.plot(t[3:], F_t[3:, p2_idx, V2_idx]*1E3, label=f'p: {p[p2_idx]*1E-5:.2f} bar, V/V_tube: {V[V2_idx]/V_tube:.2f}')
-
-# plt.title('Thrust')
-# plt.xlabel('Time [s]')
-# plt.ylabel('Mean thrust [mN]')
-# plt.grid(alpha=0.55)
-
-# plt.legend()
-
-# # %% - Plot some things for the updated model
-# plot_contour(
-#     burn_time,
-#     'Burn time (updated model)',
-#     's',
-#     show_max=True,
-#     hlines=p[p_max_idx],
-#     shift_left=-2,
-#     shift_down=2
-# )
+# plt.contourf(V / V_tube, p, baseline_m_prop_left * 1E3, 'Baseline model propellant mass left', 'g')
+
+
+# %% - All feasible solutions
+    best_scores = []
+    score2 = copy.deepcopy(score)
+    best_score, coordinates = find_2d_max(score2[:p_max_idx, :])
+    best_burn_time = burn_time[coordinates]
+    best_thrust_range = F_t_range[coordinates]
+    for i in score2:
+        best_score, coordinates = find_2d_max(score2[:p_max_idx, :])
+        best_burn_time = burn_time[coordinates]
+        best_thrust_range = F_t_range[coordinates]
+        if best_score >= 0.98 * max_score:
+            best_scores.append((best_score, coordinates))
+        score2[coordinates] = 0
+
+    plt.figure()
+    plt.contourf(V[5:15] / V_tube, p[90:115], score[90:115, 5:15], alpha=0.7)
+    plt.xlabel('V/V_tube [-]')
+    plt.ylabel('Pressure [Pa]')
+    plt.title('Score')
+    plt.grid(alpha=0.3)
+    plt.colorbar()
+
+    p_min = min(map(lambda x: x[1][0], best_scores))
+    V_max = max(map(lambda x: x[1][1], best_scores))
+
+    burn_times = []
+
+    for i in best_scores:
+        if i[0] == max_score:
+            print('i', i, 'V', V[i[1][1]] / V_tube, 'p', p[i[1][0]])
+            plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="red")
+        elif m_prop_left[i[1]] > 0.2E-3:
+            plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="cyan")
+        elif F_t_range[i[1]] > F_t_range[max_score_x, max_score_y]:
+            plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="olive")
+        else:
+            plt.scatter(V[i[1][1]] / V_tube, p[i[1][0]], marker='x', s=15, color="black")
+        plt.scatter(V[V_max] / V_tube, p[p_min], marker='x', s=15, color="orange")
+
+        burn_times.append(burn_time[i[1][0], i[1][1]])
+
+    print(f'Minimum found burn time: {min(burn_times):.1f} [s] (-{percentage_loss(min(burn_times), max_burn_time):.2f}%)')
+
+
+# %% - Compare two extremes on the score contour
+    point_1 = (max_score_x, max_score_y)
+    p_min = min(map(lambda x: x[1][0], best_scores))
+    V_max = max(map(lambda x: x[1][1], best_scores))
+    point_2 = (p_min, V_max)
+
+    coords_max_score = f'(V/V_tube: {V[max_score_y]/V_tube:.3f}, p: {p[max_score_x]*1E-5:.3f} bar)'
+    coords_suboptimal = f'(V/V_tube: {V[V_max]/V_tube:.3f}, p: {p[p_min]*1E-5:.3f} bar)'
+
+    # Input power
+    plt.figure()
+    plt.plot(t, P_t[:, max_score_x, max_score_y], label=f'{coords_max_score[1:-1]}')
+    plt.plot(t, P_t[:, p_min, V_max], label=f'{coords_suboptimal[1:-1]}')
+
+    plt.legend()
+    plt.grid(alpha=0.5)
+    plt.title('Input power')
+    plt.xlabel('Time [s]')
+    plt.ylabel('Power [W]')
+
+    plt.show()
+
+    # Thrust
+    plt.figure()
+    plt.plot(t[3:], F_t[3:, max_score_x, max_score_y] * 1E3, label=f'{coords_max_score[1:-1]}')
+    plt.plot(t[3:], F_t[3:, p_min, V_max] * 1E3, label=f'{coords_suboptimal[1:-1]}')
+
+    plt.legend()
+    plt.grid(alpha=0.5)
+    plt.title('Thrust')
+    plt.xlabel('Time [s]')
+    plt.ylabel('Thrust [mN]')
+
+    plt.show()
+
+    # percentage_loss = (1 - burn_time[p_min, V_max] / max_burn_time) * 100
+    percentage_difference = percentage_loss(burn_time[p_min, V_max], max_burn_time)
+
+    print(f'Burn time: {max_burn_time} [s] {coords_max_score}')
+    print(f'Burn time: {burn_time[p_min, V_max]:.1f} [s] -{percentage_difference:.2f}% {coords_suboptimal}')
+
+    thrust_range_percentage_loss = percentage_loss(np.nanmax(F_t[:, p_min, V_max]), np.nanmax(F_t[:, max_score_x, max_score_y]))
+    print(f'Maximum thrust: {np.nanmax(F_t[:, max_score_x, max_score_y]*1E3):.2f} [mN] {coords_max_score}')
+    print(f'Maximum thrust: {np.nanmax(F_t[:, p_min, V_max]*1E3):.2f} [mN] -{thrust_range_percentage_loss:.2f}% {coords_suboptimal}')
+
+    input_power_percentage_loss = percentage_loss(np.nanmax(P_t[:, p_min, V_max]), np.nanmax(P_t[:, max_score_x, max_score_y]))
+    print(f'Maximum input power: {np.nanmax(P_t[:, max_score_x, max_score_y]):.2f} [W] {coords_max_score}')
+    print(f'Maximum input power: {np.nanmax(P_t[:, p_min, V_max]):.2f} [W] -{input_power_percentage_loss:.2f}% {coords_suboptimal}')
+
+    propellant_mass_gained = 100 * m_prop_left[p_min, V_max] / m_prop_left[max_score_x, max_score_y] - 100
+    print(f'Propellant mass left: {m_prop_left[max_score_x, max_score_y]*1E3:.3f} [g] {coords_max_score}')
+    print(f'Propellant mass left: {m_prop_left[p_min, V_max]*1E3:.3f} [g] +{propellant_mass_gained:.2f}% {coords_suboptimal}')
+
+# %% - Thrust range gradient
+
+    grad = np.gradient(F_t_range[:-1, :-1] * 1E3)
+    mag_grad = np.sqrt(grad[0]**2 + grad[1]**2)
+
+    plt.figure(figsize=(7, 4))
+
+    plt.contour(V[:-1] / V_tube, p[:-1], F_t_range[:-1, :-1] * 1E3)
+    # plt.pcolor(V[:-1]/V_tube, p[:-1], F_t_range[:-1,:-1]*1E3, cmap='plasma')
+    # plt.colorbar(label='Thrust range [mN]')
+
+    plt.contourf(V[:-1] / V_tube, p[:-1], mag_grad, cmap="plasma")
+    # plt.pcolor(V[:-1]/V_tube, p[:-1], mag_grad[:-1,:-1], cmap='plasma')
+    plt.colorbar(label=r'$|\nabla \Delta F|$')
+    plt.scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color='black')
+    # plt.scatter(V[10]/V_tube, p[80], marker='x', s=60, color='black')
+    # plt.scatter(V[10]/V_tube, p[40], marker='x', s=60, color='black')
+    # plt.scatter(V[20]/V_tube, p[40], marker='x', s=60, color='black')
+
+    plt.title('Thrust range')
+    plt.xlabel('V/V_tube')
+    plt.ylabel('Pressure [Pa]')
+
+    plt.tight_layout()
+
+# %% - Burn time gradient
+
+    grad = np.gradient(burn_time[:-1, :-1])
+    mag_grad = np.sqrt(grad[0]**2 + grad[1]**2)
+
+    plt.figure(figsize=(7, 4))
+    plt.contour(V[:-1] / V_tube, p[:-1], burn_time[:-1, :-1])
+    plt.colorbar(label='Burn time [s]')
+    plt.contourf(V[:-1] / V_tube, p[:-1], mag_grad, cmap="plasma")
+    plt.colorbar(label=r'$|\nabla t_b|$')
+    plt.scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color='black')
+
+    plt.title('Burn time')
+    plt.xlabel('V/V_tube')
+    plt.ylabel('Pressure [Pa]')
+
+    plt.tight_layout()
+
+# %% - Propellant mass left gradient
+
+    grad = np.gradient(m_prop_left * 1E3)
+    mag_grad = np.sqrt(grad[0]**2 + grad[1]**2)
+
+    plt.figure(figsize=(7, 4))
+    plt.contour(V / V_tube, p, m_prop_left * 1E3)
+    plt.colorbar(label='Propellant mass left [g]')
+    plt.contourf(V / V_tube, p, mag_grad, cmap="plasma")
+    plt.colorbar(label=r'$|\nabla m|$')
+    plt.scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color='white')
+
+    plt.title('Propellant mass left - gradient')
+    plt.xlabel('V/V_tube')
+    plt.ylabel('Pressure [Pa]')
+
+    plt.tight_layout()
+
+# %% - Mean input power
+
+    grad = np.gradient(1 - normalized_mean_P_t)
+    mag_grad = np.sqrt(grad[0]**2 + grad[1]**2)
+
+    plt.figure(figsize=(7, 4))
+
+    plt.contour(V / V_tube, p, 1 - normalized_mean_P_t)
+    # plt.pcolor(V/V_tube, p, 1-normalized_mean_P_t, cmap="plasma")
+    plt.colorbar(label='Mean input power [W]')
+    plt.contourf(V / V_tube, p, mag_grad, cmap="plasma")
+    # plt.pcolor(V/V_tube, p, mag_grad, vmin=0, vmax=0.014, cmap="plasma")
+    plt.colorbar(label=r'$|\nabla P_{input}|$')
+    plt.scatter(V[max_score_y] / V_tube, p[max_score_x], marker='x', s=60, color='white')
+
+    plt.title('Mean input power')
+    plt.xlabel('V/V_tube')
+    plt.ylabel('Pressure [Pa]')
+
+    plt.tight_layout()
+
+# %% - Thrust range vs mean thrust
+    p1_idx = 95
+    V1_idx = 2
+    p2_idx = -2
+    V2_idx = -2
+
+    print(f'Top left: {np.nanmean(F_t[:, 95, 2])*1E3:.3f} mN')
+    print(f'Top right: {np.nanmean(F_t[:, -2, -2])*1E3:.3f} mN')
+
+    plt.figure()
+
+    plt.plot(t[3:], F_t[3:, p1_idx, V1_idx] * 1E3, label=f'p: {p[p1_idx]*1E-5:.2f} bar, V/V_tube: {V[V1_idx]/V_tube:.2f}')
+    plt.plot(t[3:], F_t[3:, p2_idx, V2_idx] * 1E3, label=f'p: {p[p2_idx]*1E-5:.2f} bar, V/V_tube: {V[V2_idx]/V_tube:.2f}')
+
+    plt.title('Thrust')
+    plt.xlabel('Time [s]')
+    plt.ylabel('Mean thrust [mN]')
+    plt.grid(alpha=0.55)
+
+    plt.legend()

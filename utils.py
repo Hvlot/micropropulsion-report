@@ -153,12 +153,9 @@ def calc_dp(m, rho):
     f = 64 / Re
     L = 0.3
 
-    N_lines = L / 2E-3
-    # N_bends = 200 * N_lines
     N_bends = 2
 
     dp = f * L / d_fl * 0.5 * rho * v**2 + 1.3 * N_bends * 0.5 * v**2
-    # dp = 1.3 * N_bends * 0.5 * v**2
 
     return dp
 
